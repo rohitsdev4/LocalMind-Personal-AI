@@ -426,16 +426,16 @@ function scheduleNotification(reminder: Reminder): void {
 }
 
 /**
- * Generates the tool definitions section for the system prompt
+ * Generates COMPACT tool definitions for the system prompt.
+ * Shorter = less prefill = faster first token.
  */
 export function getToolDefinitionsForPrompt(): string {
-    return TOOL_DEFINITIONS.map((tool) => {
-        const params = Object.entries(tool.parameters)
-            .map(([key, val]) => {
-                return `    - ${key} (${val.type}${val.required ? ", required" : ", optional"}): ${val.description}`;
-            })
-            .join("\n");
-
-        return `  - ${tool.name}: ${tool.description}\n    Parameters:\n${params || "    (none)"}`;
-    }).join("\n\n");
+    return [
+        "- create_task(name, due_date?, priority?): Create a task",
+        "- log_habit(name, status): Log habit as done/skipped/missed",
+        "- write_journal(entry, mood): Save journal entry with mood",
+        "- search_memory(query): Search past tasks/chats/habits/journal",
+        "- set_reminder(message, time): Set browser notification (e.g. '30m', '2h')",
+        "- get_current_date(): Get current date and time",
+    ].join("\n");
 }

@@ -1,10 +1,11 @@
 // ============================================================
-// LocalMind — WebLLM Hook
-// React hook for managing the AI engine lifecycle:
-//   - Model download & initialization
-//   - Chat completion with streaming
-//   - Context window management
-//   - Tool call detection and execution
+// LocalMind — WebLLM Hook (STREAMING + OPTIMIZED)
+// Key optimizations:
+//   1. Streaming generation — tokens appear instantly
+//   2. Reduced max_tokens (512 vs 1024) for faster responses
+//   3. Greedy sampling (temp=0.6) for faster decoding
+//   4. Smaller context window (8 messages) to reduce prefill
+//   5. Abort support via AbortController
 // ============================================================
 
 "use client";
@@ -17,7 +18,11 @@ import type {
     ModelDownloadProgress,
     UserSettings,
 } from "@/lib/types";
-import { parseToolCalls, generateRetryPrompt, looksLikeFailedToolCall } from "@/lib/toolParser";
+import {
+    parseToolCalls,
+    generateRetryPrompt,
+    looksLikeFailedToolCall,
+} from "@/lib/toolParser";
 import { executeTool } from "@/lib/tools";
 import { getContextWindow } from "@/lib/memory";
 import { buildSystemPrompt } from "@/lib/systemPrompt";
@@ -46,7 +51,8 @@ interface UseWebLLMReturn {
 
 export function useWebLLM(): UseWebLLMReturn {
     // Engine state
-    const engineRef = useRef<import("@mlc-ai/web-llm").MLCEngine | null>(null);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const engineRef = useRef<any>(null);
     const [status, setStatus] = useState<EngineStatus>("idle");
     const [error, setError] = useState<string | null>(null);
     const [webGPUSupported, setWebGPUSupported] = useState(true);
@@ -136,7 +142,7 @@ export function useWebLLM(): UseWebLLMReturn {
                     let loaded = 0;
                     let total = 0;
                     if (sizeMatch) {
-                        loaded = parseFloat(sizeMatch[1]) * 1024 * 1024; // Convert to bytes
+                        loaded = parseFloat(sizeMatch[1]) * 1024 * 1024;
                         total = parseFloat(sizeMatch[2]) * 1024 * 1024;
                     }
 
@@ -177,7 +183,8 @@ export function useWebLLM(): UseWebLLMReturn {
     }, []);
 
     // ============================================================
-    // Message Sending & Generation
+    // STREAMING Message Generation (KEY OPTIMIZATION)
+    // Tokens appear word-by-word as they are generated
     // ============================================================
 
     const sendMessage = useCallback(
@@ -201,51 +208,89 @@ export function useWebLLM(): UseWebLLMReturn {
             setStatus("generating");
 
             try {
-                // Get context window (sliding window + memory)
+                // Get context window — use smaller window (8 msgs) for speed
                 const settings = await db.getSettings();
                 const contextMessages = await getContextWindow(
                     updatedMessages,
-                    settings.maxContextMessages
+                    Math.min(settings.maxContextMessages, 8) // Cap at 8 for speed
                 );
 
-                // Format for WebLLM
-                const llmMessages = contextMessages.map((m) => ({
-                    role: m.role as "system" | "user" | "assistant",
-                    content: m.content,
-                }));
+                // Format for WebLLM — only use system/user/assistant roles
+                const llmMessages = contextMessages
+                    .filter((m) => m.role !== "tool") // Skip tool messages
+                    .map((m) => ({
+                        role: (m.role === "tool" ? "system" : m.role) as
+                            | "system"
+                            | "user"
+                            | "assistant",
+                        content: m.content,
+                    }));
 
-                // Generate completion
-                const reply = await engine.chat.completions.create({
+                // ====== STREAMING GENERATION ======
+                // Create a placeholder assistant message that we'll update in real-time
+                const assistantMsgId = uuidv4();
+                const assistantMessage: ChatMessage = {
+                    id: assistantMsgId,
+                    role: "assistant",
+                    content: "",
+                    timestamp: new Date().toISOString(),
+                };
+
+                // Add empty assistant message to UI immediately
+                setMessages((prev) => [...prev, assistantMessage]);
+
+                let fullContent = "";
+
+                // Use streaming API — tokens appear as they are generated
+                const stream = await engine.chat.completions.create({
                     messages: llmMessages,
-                    temperature: 0.7,
-                    max_tokens: 1024,
-                    stream: false,
+                    temperature: 0.6, // Lower temp = faster sampling
+                    max_tokens: 512, // Shorter responses = faster
+                    top_p: 0.9,
+                    stream: true, // <--- STREAMING ENABLED
                 });
 
-                if (abortRef.current) return;
+                // Process the stream chunk by chunk
+                for await (const chunk of stream) {
+                    if (abortRef.current) break;
 
-                const assistantContent =
-                    reply.choices[0]?.message?.content || "I couldn't generate a response.";
+                    const delta = chunk.choices[0]?.delta?.content || "";
+                    if (delta) {
+                        fullContent += delta;
 
-                // Parse for tool calls
+                        // Update the message in-place (real-time token display)
+                        setMessages((prev) =>
+                            prev.map((m) =>
+                                m.id === assistantMsgId
+                                    ? { ...m, content: fullContent }
+                                    : m
+                            )
+                        );
+                    }
+                }
+
+                if (abortRef.current) {
+                    // If aborted, keep whatever was generated so far
+                    return;
+                }
+
+                // ====== POST-GENERATION: Check for tool calls ======
                 const { toolCalls, cleanText, hasToolCalls } =
-                    parseToolCalls(assistantContent);
+                    parseToolCalls(fullContent);
 
                 if (hasToolCalls) {
-                    // Add the assistant's text part first (if any)
-                    if (cleanText) {
-                        const textMessage: ChatMessage = {
-                            id: uuidv4(),
-                            role: "assistant",
-                            content: cleanText,
-                            timestamp: new Date().toISOString(),
-                        };
-                        setMessages((prev) => [...prev, textMessage]);
-                    }
+                    // Update the assistant message with cleaned text
+                    setMessages((prev) =>
+                        prev.map((m) =>
+                            m.id === assistantMsgId
+                                ? { ...m, content: cleanText || "Let me handle that for you..." }
+                                : m
+                        )
+                    );
 
                     // Execute each tool call
                     for (const toolCall of toolCalls) {
-                        // Show "executing" state
+                        // Show executing state
                         const executingMessage: ChatMessage = {
                             id: uuidv4(),
                             role: "tool",
@@ -258,7 +303,7 @@ export function useWebLLM(): UseWebLLMReturn {
                         // Execute the tool
                         const result = await executeTool(toolCall);
 
-                        // Replace the executing message with the result
+                        // Replace executing message with result
                         const resultMessage: ChatMessage = {
                             id: executingMessage.id,
                             role: "tool",
@@ -274,149 +319,87 @@ export function useWebLLM(): UseWebLLMReturn {
                             )
                         );
 
-                        // If it's a search_memory result, feed back to the AI for context
+                        // For search_memory, do a quick follow-up (also streamed)
                         if (
                             toolCall.name === "search_memory" &&
                             result.success &&
                             result.data
                         ) {
-                            // Inject the search results and get AI to respond with context
-                            const searchContextMsg: ChatMessage = {
+                            await streamFollowUp(
+                                engine,
+                                llmMessages,
+                                toolCall,
+                                result
+                            );
+                        }
+                    }
+                } else if (looksLikeFailedToolCall(fullContent)) {
+                    // Retry with streaming
+                    const retryPrompt = generateRetryPrompt(fullContent);
+                    const retryMsg = {
+                        role: "system" as const,
+                        content: retryPrompt,
+                    };
+
+                    const retryMsgId = uuidv4();
+                    setMessages((prev) => [
+                        ...prev,
+                        {
+                            id: retryMsgId,
+                            role: "assistant",
+                            content: "",
+                            timestamp: new Date().toISOString(),
+                        },
+                    ]);
+
+                    let retryContent = "";
+                    const retryStream = await engine.chat.completions.create({
+                        messages: [...llmMessages, retryMsg],
+                        temperature: 0.4,
+                        max_tokens: 512,
+                        stream: true,
+                    });
+
+                    for await (const chunk of retryStream) {
+                        if (abortRef.current) break;
+                        const delta = chunk.choices[0]?.delta?.content || "";
+                        if (delta) {
+                            retryContent += delta;
+                            setMessages((prev) =>
+                                prev.map((m) =>
+                                    m.id === retryMsgId
+                                        ? { ...m, content: retryContent }
+                                        : m
+                                )
+                            );
+                        }
+                    }
+
+                    // Check if retry contains tool calls
+                    const retryParsed = parseToolCalls(retryContent);
+                    if (retryParsed.hasToolCalls) {
+                        setMessages((prev) =>
+                            prev.map((m) =>
+                                m.id === retryMsgId
+                                    ? { ...m, content: retryParsed.cleanText || "" }
+                                    : m
+                            )
+                        );
+                        for (const tc of retryParsed.toolCalls) {
+                            const result = await executeTool(tc);
+                            const resultMsg: ChatMessage = {
                                 id: uuidv4(),
-                                role: "system",
-                                content: `[MEMORY SEARCH RESULTS for "${toolCall.args.query}"]\n${result.displayMessage}\n[END SEARCH RESULTS]\nPlease use this information to answer the user's question.`,
+                                role: "tool",
+                                content: result.displayMessage,
+                                toolName: tc.name,
+                                toolResult: result.data,
                                 timestamp: new Date().toISOString(),
                             };
-
-                            const followUpMessages = [
-                                ...messagesRef.current,
-                                searchContextMsg,
-                            ];
-
-                            const followUpContext = await getContextWindow(
-                                followUpMessages,
-                                settings.maxContextMessages
-                            );
-
-                            const followUpLLM = followUpContext.map((m) => ({
-                                role: m.role as "system" | "user" | "assistant",
-                                content: m.content,
-                            }));
-
-                            const followUpReply = await engine.chat.completions.create({
-                                messages: followUpLLM,
-                                temperature: 0.7,
-                                max_tokens: 512,
-                                stream: false,
-                            });
-
-                            const followUpContent =
-                                followUpReply.choices[0]?.message?.content || "";
-
-                            if (followUpContent) {
-                                const followUpMessage: ChatMessage = {
-                                    id: uuidv4(),
-                                    role: "assistant",
-                                    content: parseToolCalls(followUpContent).cleanText || followUpContent,
-                                    timestamp: new Date().toISOString(),
-                                };
-                                setMessages((prev) => [...prev, followUpMessage]);
-                            }
+                            setMessages((prev) => [...prev, resultMsg]);
                         }
-                    }
-                } else {
-                    // Check if it looks like a failed tool call attempt
-                    if (looksLikeFailedToolCall(assistantContent)) {
-                        // Send retry prompt
-                        const retryPrompt = generateRetryPrompt(assistantContent);
-                        const retrySystemMsg: ChatMessage = {
-                            id: uuidv4(),
-                            role: "system",
-                            content: retryPrompt,
-                            timestamp: new Date().toISOString(),
-                        };
-
-                        // Add the broken response (so user can see what happened)
-                        const brokenMsg: ChatMessage = {
-                            id: uuidv4(),
-                            role: "assistant",
-                            content: assistantContent,
-                            timestamp: new Date().toISOString(),
-                        };
-                        setMessages((prev) => [...prev, brokenMsg, retrySystemMsg]);
-
-                        // Retry generation
-                        const retryMessages = [
-                            ...messagesRef.current,
-                            brokenMsg,
-                            retrySystemMsg,
-                        ];
-                        const retryContext = await getContextWindow(
-                            retryMessages,
-                            settings.maxContextMessages
-                        );
-
-                        const retryLLM = retryContext.map((m) => ({
-                            role: m.role as "system" | "user" | "assistant",
-                            content: m.content,
-                        }));
-
-                        const retryReply = await engine.chat.completions.create({
-                            messages: retryLLM,
-                            temperature: 0.5,
-                            max_tokens: 1024,
-                            stream: false,
-                        });
-
-                        const retryContent =
-                            retryReply.choices[0]?.message?.content || "";
-
-                        if (retryContent) {
-                            // Try parsing again
-                            const retryParsed = parseToolCalls(retryContent);
-                            if (retryParsed.hasToolCalls) {
-                                for (const tc of retryParsed.toolCalls) {
-                                    const result = await executeTool(tc);
-                                    const resultMsg: ChatMessage = {
-                                        id: uuidv4(),
-                                        role: "tool",
-                                        content: result.displayMessage,
-                                        toolName: tc.name,
-                                        toolResult: result.data,
-                                        timestamp: new Date().toISOString(),
-                                    };
-                                    setMessages((prev) => [...prev, resultMsg]);
-                                }
-                                if (retryParsed.cleanText) {
-                                    const retryTextMsg: ChatMessage = {
-                                        id: uuidv4(),
-                                        role: "assistant",
-                                        content: retryParsed.cleanText,
-                                        timestamp: new Date().toISOString(),
-                                    };
-                                    setMessages((prev) => [...prev, retryTextMsg]);
-                                }
-                            } else {
-                                const retryTextMsg: ChatMessage = {
-                                    id: uuidv4(),
-                                    role: "assistant",
-                                    content: retryContent,
-                                    timestamp: new Date().toISOString(),
-                                };
-                                setMessages((prev) => [...prev, retryTextMsg]);
-                            }
-                        }
-                    } else {
-                        // Normal text response
-                        const assistantMessage: ChatMessage = {
-                            id: uuidv4(),
-                            role: "assistant",
-                            content: assistantContent,
-                            timestamp: new Date().toISOString(),
-                        };
-                        setMessages((prev) => [...prev, assistantMessage]);
                     }
                 }
+                // If no tool calls, the streamed text is already displayed ✅
             } catch (err) {
                 const errMsg = err instanceof Error ? err.message : String(err);
                 setError(`Generation error: ${errMsg}`);
@@ -425,7 +408,7 @@ export function useWebLLM(): UseWebLLMReturn {
                 const errorMessage: ChatMessage = {
                     id: uuidv4(),
                     role: "assistant",
-                    content: `I encountered an error while generating a response. Please try again. (Error: ${errMsg})`,
+                    content: `I encountered an error. Please try again. (${errMsg})`,
                     timestamp: new Date().toISOString(),
                 };
                 setMessages((prev) => [...prev, errorMessage]);
@@ -436,6 +419,60 @@ export function useWebLLM(): UseWebLLMReturn {
         },
         [isGenerating]
     );
+
+    // ============================================================
+    // Streaming follow-up for search_memory results
+    // ============================================================
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async function streamFollowUp(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        engine: any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        baseMsgs: any[],
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        toolCall: any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        result: any
+    ) {
+        const contextInjection = {
+            role: "system" as const,
+            content: `[MEMORY RESULTS for "${toolCall.args.query}"]\n${result.displayMessage}\n[END]\nUse this to answer the user. Be concise.`,
+        };
+
+        const followUpId = uuidv4();
+        setMessages((prev) => [
+            ...prev,
+            {
+                id: followUpId,
+                role: "assistant" as const,
+                content: "",
+                timestamp: new Date().toISOString(),
+            },
+        ]);
+
+        let followUpContent = "";
+        const followUpStream = await engine.chat.completions.create({
+            messages: [...baseMsgs, contextInjection],
+            temperature: 0.6,
+            max_tokens: 256, // Short follow-up
+            stream: true,
+        });
+
+        for await (const chunk of followUpStream) {
+            if (abortRef.current) break;
+            const delta = chunk.choices[0]?.delta?.content || "";
+            if (delta) {
+                followUpContent += delta;
+                setMessages((prev) =>
+                    prev.map((m) =>
+                        m.id === followUpId
+                            ? { ...m, content: followUpContent }
+                            : m
+                    )
+                );
+            }
+        }
+    }
 
     // ============================================================
     // Utility Functions
@@ -459,7 +496,6 @@ export function useWebLLM(): UseWebLLMReturn {
         const saveInterval = setInterval(async () => {
             const currentMessages = messagesRef.current;
             if (currentMessages.length > 1) {
-                // More than just system message
                 const session = {
                     id: "current_session",
                     title:
@@ -472,7 +508,7 @@ export function useWebLLM(): UseWebLLMReturn {
                 };
                 await db.saveChatSession(session);
             }
-        }, 30000); // Save every 30 seconds
+        }, 30000);
 
         return () => clearInterval(saveInterval);
     }, []);
