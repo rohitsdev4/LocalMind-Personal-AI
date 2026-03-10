@@ -1,16 +1,16 @@
 "use client";
 
-// ============================================================
-// LocalMind — Main Page
+// ================================================================
+// LocalMind -- Main Page
 // Entry point rendering the full-screen chat interface
-// ============================================================
+// ================================================================
 
 import { ChatInterface } from "@/components/ChatInterface";
 
 export default function Home() {
-  return (
-    <main>
-      <ChatInterface />
-    </main>
-  );
+    return (
+        <main>
+            <ChatInterface />
+        </main>
+    );
 }
