@@ -1,583 +1,630 @@
-// ============================================================
-// LocalMind — Tool Implementations
-// Actual functions that execute when the AI calls a tool
-// ============================================================
+// ================================================================
+// LocalMind -- Tool Implementations
+// All AI-callable tools for task, habit, journal, and reminder management
+// ================================================================
 
-import { v4 as uuidv4 } from "uuid";
-import db from "./db";
-import { searchMemory } from "./memory";
-import type {
+import {
     ToolCall,
     ToolResult,
     ToolDefinition,
-    Task,
     TaskPriority,
+    Task,
     Habit,
-    JournalEntry,
-    Mood,
     Reminder,
 } from "./types";
+import * as db from "./db";
 
-// ============================================================
-// Tool Definitions (for the system prompt)
-// ============================================================
+// ================================================================
+// Tool Definitions (for system prompt)
+// ================================================================
 
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
+    // --- Tasks ---
     {
         name: "create_task",
-        description:
-            "Creates a new task and saves it. Use when the user asks you to add, create, or remember a task.",
+        description: "Create a new task/todo item",
         parameters: {
-            name: { type: "string", description: "The task name/title", required: true },
-            due_date: {
-                type: "string",
-                description: "Due date in ISO format (YYYY-MM-DD). Optional.",
-            },
-            priority: {
-                type: "string",
-                description: "Priority level: low, medium, high, or urgent. Defaults to medium.",
-            },
+            name: { type: "string", description: "Task name", required: true },
+            priority: { type: "string", description: "Priority: low, medium, high, urgent. Default: medium" },
+            description: { type: "string", description: "Optional task description" },
+            due_date: { type: "string", description: "Optional due date (YYYY-MM-DD)" },
+        },
+    },
+    {
+        name: "complete_task",
+        description: "Mark a task as done by name",
+        parameters: {
+            name: { type: "string", description: "Task name (partial match OK)", required: true },
+        },
+    },
+    {
+        name: "update_task",
+        description: "Update a task's properties",
+        parameters: {
+            name: { type: "string", description: "Current task name to find (partial match OK)", required: true },
+            new_name: { type: "string", description: "New name for the task" },
+            priority: { type: "string", description: "New priority: low, medium, high, urgent" },
+            due_date: { type: "string", description: "New due date (YYYY-MM-DD)" },
+            description: { type: "string", description: "New description" },
+            status: { type: "string", description: "New status: pending, in-progress, done, cancelled" },
+        },
+    },
+    {
+        name: "delete_task",
+        description: "Delete a task by name",
+        parameters: {
+            name: { type: "string", description: "Task name to delete (partial match OK)", required: true },
+        },
+    },
+    {
+        name: "get_tasks",
+        description: "List all tasks, optionally filtered by status",
+        parameters: {
+            status: { type: "string", description: "Filter by status: pending, in-progress, done, cancelled" },
+        },
+    },
+    // --- Habits ---
+    {
+        name: "create_habit",
+        description: "Create a new habit to track",
+        parameters: {
+            name: { type: "string", description: "Habit name", required: true },
+            frequency: { type: "string", description: "Frequency: daily, weekly, monthly. Default: daily" },
+            description: { type: "string", description: "Optional description" },
+            category: { type: "string", description: "Optional category (health, productivity, learning, etc.)" },
+            time_of_day: { type: "string", description: "Preferred time: morning, afternoon, evening, any" },
         },
     },
     {
         name: "log_habit",
-        description:
-            "Logs a habit completion or updates its status. Use when the user mentions doing, skipping, or pausing a habit.",
+        description: "Log a habit completion for today",
         parameters: {
-            name: { type: "string", description: "The habit name", required: true },
-            status: {
-                type: "string",
-                description: "Status: done, skipped, missed, or paused",
-                required: true,
-            },
-            note: {
-                type: "string",
-                description: "Optional note or observation about the habit.",
-            },
+            name: { type: "string", description: "Habit name (partial match OK)", required: true },
+            status: { type: "string", description: "Status: done, skipped, missed. Default: done" },
+            note: { type: "string", description: "Optional note about today's log" },
         },
     },
     {
-        name: "create_habit",
-        description: "Creates a new habit to track. Use when the user explicitly asks to start tracking a new habit.",
+        name: "delete_habit",
+        description: "Delete a habit by name",
         parameters: {
-            name: { type: "string", description: "The habit name", required: true },
-            category: { type: "string", description: "Category: Health, Learning, Productivity, Mindfulness, or Other." },
-            timeOfDay: { type: "string", description: "Time to do it: morning, afternoon, evening, or any." },
-            frequencyType: { type: "string", description: "Frequency: daily, weekly, monthly, or x_per_week." },
-            frequencyTimes: { type: "string", description: "If x_per_week, how many times." },
+            name: { type: "string", description: "Habit name to delete (partial match OK)", required: true },
         },
     },
+    {
+        name: "get_habits",
+        description: "List all tracked habits with streaks",
+        parameters: {},
+    },
+    // --- Journal ---
     {
         name: "write_journal",
-        description:
-            "Saves a journal entry. Use when the user wants to write down thoughts or reflect.",
+        description: "Write a journal entry",
         parameters: {
-            entry: {
-                type: "string",
-                description: "The journal entry text",
-                required: true,
-            },
-            mood: {
-                type: "string",
-                description: "Mood: great, good, okay, bad, or terrible",
-                required: true,
-            },
+            entry: { type: "string", description: "Journal entry text", required: true },
+            mood: { type: "string", description: "Mood: great, good, okay, bad, terrible. Default: okay" },
+            tags: { type: "string", description: "Comma-separated tags" },
         },
     },
     {
-        name: "search_memory",
-        description:
-            "Searches past conversations, tasks, habits, and journal entries. Use when the user asks about something from the past.",
+        name: "get_journal_entries",
+        description: "List recent journal entries",
         parameters: {
-            query: {
-                type: "string",
-                description: "Search query to find relevant past context",
-                required: true,
-            },
+            limit: { type: "number", description: "Number of entries to return. Default: 5" },
+            mood: { type: "string", description: "Filter by mood: great, good, okay, bad, terrible" },
         },
     },
+    // --- Reminders ---
     {
         name: "set_reminder",
-        description:
-            "Sets a browser notification reminder. Use when the user asks to be reminded about something.",
+        description: "Set a reminder for a specific time",
         parameters: {
-            message: {
-                type: "string",
-                description: "The reminder message",
-                required: true,
-            },
-            time: {
-                type: "string",
-                description:
-                    "When to trigger the reminder. Either a duration like '30m', '2h' or an ISO datetime string.",
-                required: true,
-            },
+            message: { type: "string", description: "Reminder message", required: true },
+            time: { type: "string", description: "Time for reminder (ISO 8601 or natural like '2024-01-15T14:00:00')", required: true },
+            repeat: { type: "string", description: "Repeat: none, daily, weekly, monthly. Default: none" },
+        },
+    },
+    {
+        name: "get_reminders",
+        description: "List all reminders",
+        parameters: {
+            show_completed: { type: "boolean", description: "Include completed reminders. Default: false" },
+        },
+    },
+    {
+        name: "cancel_reminder",
+        description: "Cancel/delete a reminder by message",
+        parameters: {
+            message: { type: "string", description: "Reminder message to find (partial match OK)", required: true },
+        },
+    },
+    // --- Utility ---
+    {
+        name: "search_memory",
+        description: "Search through past conversation summaries",
+        parameters: {
+            query: { type: "string", description: "Search query", required: true },
         },
     },
     {
         name: "get_current_date",
-        description:
-            "Returns the current date and time. Use when you need to know today's date or the current time.",
-        parameters: {},
-    },
-    {
-        name: "get_tasks",
-        description:
-            "Returns a list of all your current tasks. Use when the user asks what tasks they have, or asks you to list their tasks.",
-        parameters: {},
-    },
-    {
-        name: "get_habits",
-        description:
-            "Returns a list of all your habits and their streaks. Use when the user asks what habits they are tracking.",
+        description: "Get the current date and time",
         parameters: {},
     },
 ];
 
-// ============================================================
-// Tool Executor — Routes tool calls to implementations
-// ============================================================
+// ================================================================
+// Format tool definitions for the system prompt
+// ================================================================
 
-export async function executeTool(toolCall: ToolCall): Promise<ToolResult> {
-    try {
-        switch (toolCall.name) {
-            case "create_task":
-                return await executeCreateTask(toolCall.args);
-            case "log_habit":
-                return await executeLogHabit(toolCall.args);
-            case "create_habit":
-                return await executeCreateHabit(toolCall.args);
-            case "write_journal":
-                return await executeWriteJournal(toolCall.args);
-            case "search_memory":
-                return await executeSearchMemory(toolCall.args);
-            case "set_reminder":
-                return await executeSetReminder(toolCall.args);
-            case "get_current_date":
-                return executeGetCurrentDate();
-            case "get_tasks":
-                return await executeGetTasks();
-            case "get_habits":
-                return await executeGetHabits();
-            default:
-                return {
-                    success: false,
-                    error: `Unknown tool: ${toolCall.name}`,
-                    displayMessage: `⚠️ Unknown tool "${toolCall.name}"`,
-                };
-        }
-    } catch (error) {
-        const errMsg = error instanceof Error ? error.message : String(error);
-        return {
-            success: false,
-            error: errMsg,
-            displayMessage: `❌ Error executing ${toolCall.name}: ${errMsg}`,
-        };
-    }
+export function getToolDefinitionsForPrompt(): string {
+    return TOOL_DEFINITIONS.map((tool) => {
+        const params = Object.entries(tool.parameters)
+            .map(([key, val]) => {
+                const req = val.required ? " (required)" : " (optional)";
+                return `    - ${key}: ${val.type}${req} -- ${val.description}`;
+            })
+            .join("\n");
+        return `${tool.name}: ${tool.description}${params ? "\n  Parameters:\n" + params : ""}`;
+    }).join("\n\n");
 }
 
-// ============================================================
-// Individual Tool Implementations
-// ============================================================
+// ================================================================
+// Fuzzy name matching helper
+// ================================================================
 
-async function executeCreateTask(
-    args: Record<string, unknown>
-): Promise<ToolResult> {
-    const name = String(args.name || args.title || "Untitled Task");
-    const dueDate = args.due_date ? String(args.due_date) : undefined;
-    const priority = validatePriority(String(args.priority || "medium"));
+function fuzzyMatch<T extends { name: string; id: string }>(
+    items: T[],
+    query: string
+): T | null {
+    const q = query.toLowerCase().trim();
+    if (!q) return null;
 
-    const task: Task = {
-        id: uuidv4(),
-        name,
-        priority,
-        status: "pending",
-        dueDate: dueDate || undefined,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-    };
+    // Exact match first
+    const exact = items.find((item) => item.name.toLowerCase() === q);
+    if (exact) return exact;
 
-    await db.saveTask(task);
+    // Starts with
+    const startsWith = items.find((item) => item.name.toLowerCase().startsWith(q));
+    if (startsWith) return startsWith;
 
-    return {
-        success: true,
-        data: task,
-        displayMessage: `✅ Task created: "${name}" (${priority} priority)${dueDate ? ` — Due: ${dueDate}` : ""}`,
-    };
+    // Contains
+    const contains = items.find((item) => item.name.toLowerCase().includes(q));
+    if (contains) return contains;
+
+    // Reverse contains (query contains item name)
+    const reverseContains = items.find((item) => q.includes(item.name.toLowerCase()));
+    if (reverseContains) return reverseContains;
+
+    return null;
 }
 
-async function executeCreateHabit(
-    args: Record<string, unknown>
-): Promise<ToolResult> {
-    const name = String(args.name || "Untitled Habit");
-    const category = String(args.category || "Health");
-    const timeOfDay = validateTimeOfDay(String(args.timeOfDay || "any"));
-    const frequencyType = validateFrequencyType(String(args.frequencyType || "daily"));
-    const frequencyTimes = parseInt(String(args.frequencyTimes || "3"), 10);
-
-    let frequency: "daily" | "weekly" | "monthly" | { type: "x_per_week", times: number } = frequencyType as "daily" | "weekly" | "monthly";
-    if (frequencyType === "x_per_week") {
-        frequency = { type: "x_per_week", times: isNaN(frequencyTimes) ? 3 : frequencyTimes };
-    }
-
-    const habit: Habit = {
-        id: uuidv4(),
-        name,
-        category,
-        timeOfDay,
-        frequency,
-        logs: [],
-        streak: 0,
-        longestStreak: 0,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-    };
-
-    await db.saveHabit(habit);
-
-    return {
-        success: true,
-        data: habit,
-        displayMessage: `✅ Created habit: "${name}" (${category}, ${timeOfDay})`,
-    };
+function fuzzyMatchReminder(reminders: Reminder[], query: string): Reminder | null {
+    const q = query.toLowerCase().trim();
+    if (!q) return null;
+    const exact = reminders.find((r) => r.message.toLowerCase() === q);
+    if (exact) return exact;
+    const contains = reminders.find((r) => r.message.toLowerCase().includes(q));
+    if (contains) return contains;
+    const reverse = reminders.find((r) => q.includes(r.message.toLowerCase()));
+    if (reverse) return reverse;
+    return null;
 }
 
-async function executeLogHabit(
-    args: Record<string, unknown>
-): Promise<ToolResult> {
-    const name = String(args.name || "Unnamed Habit");
-    const status = validateHabitStatus(String(args.status || "done"));
-    const note = args.note ? String(args.note) : undefined;
+// ================================================================
+// Notification helper
+// ================================================================
 
-    // Check if habit already exists
-    const allHabits = await db.getAllHabits();
-    let habit = allHabits.find(
-        (h) => h.name.toLowerCase() === name.toLowerCase()
-    );
-
-    const today = new Date().toISOString().split("T")[0];
-
-    if (habit) {
-        // Update existing habit
-        const logIndex = habit.logs.findIndex((l) => l.date === today);
-        let newStreak = habit.streak;
-
-        if (logIndex >= 0) {
-            const oldStatus = habit.logs[logIndex].status;
-            habit.logs[logIndex] = { date: today, status, note };
-
-            if (oldStatus !== "done" && status === "done") {
-                newStreak += 1;
-            } else if (oldStatus === "done" && status !== "done") {
-                newStreak = Math.max(0, newStreak - 1);
-            }
-        } else {
-            habit.logs.push({ date: today, status, note });
-            if (status === "done") {
-                newStreak += 1;
-            } else if (status === "skipped" || status === "missed") {
-                newStreak = 0;
-            }
-        }
-
-        habit.streak = newStreak;
-        if (newStreak > (habit.longestStreak || 0)) {
-            habit.longestStreak = newStreak;
-        }
-
-        habit.updatedAt = new Date().toISOString();
-    } else {
-        // Create new habit if it doesn't exist
-        habit = {
-            id: uuidv4(),
-            name,
-            category: "Other",
-            timeOfDay: "any",
-            frequency: "daily",
-            logs: [{ date: today, status, note }],
-            streak: status === "done" ? 1 : 0,
-            longestStreak: status === "done" ? 1 : 0,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-        };
-    }
-
-    await db.saveHabit(habit);
-
-    const emoji = status === "done" ? "🔥" : status === "skipped" ? "⏭️" : status === "paused" ? "⏸️" : "❌";
-    return {
-        success: true,
-        data: habit,
-        displayMessage: `${emoji} Habit "${name}" — ${status} (${habit.streak} day streak)${note ? `\n📝 Note: ${note}` : ""}`,
-    };
-}
-
-async function executeWriteJournal(
-    args: Record<string, unknown>
-): Promise<ToolResult> {
-    const entry = String(args.entry || args.text || "");
-    const mood = validateMood(String(args.mood || "okay"));
-
-    if (!entry.trim()) {
-        return {
-            success: false,
-            error: "Journal entry cannot be empty",
-            displayMessage: "⚠️ Cannot save an empty journal entry.",
-        };
-    }
-
-    const journalEntry: JournalEntry = {
-        id: uuidv4(),
-        entry,
-        mood,
-        createdAt: new Date().toISOString(),
-    };
-
-    await db.saveJournalEntry(journalEntry);
-
-    const moodEmoji: Record<Mood, string> = {
-        great: "😄",
-        good: "🙂",
-        okay: "😐",
-        bad: "😟",
-        terrible: "😢",
-    };
-
-    return {
-        success: true,
-        data: journalEntry,
-        displayMessage: `📝 Journal entry saved ${moodEmoji[mood]} (${mood})`,
-    };
-}
-
-async function executeSearchMemory(
-    args: Record<string, unknown>
-): Promise<ToolResult> {
-    const query = String(args.query || "");
-
-    if (!query.trim()) {
-        return {
-            success: false,
-            error: "Search query cannot be empty",
-            displayMessage: "⚠️ Please provide a search query.",
-        };
-    }
-
-    const results = await searchMemory(query);
-
-    if (results.length === 0) {
-        return {
-            success: true,
-            data: [],
-            displayMessage: `🔍 No memories found for "${query}"`,
-        };
-    }
-
-    // Format results for the AI to read
-    const formattedResults = results
-        .map(
-            (r, i) =>
-                `${i + 1}. [${r.source.toUpperCase()}] (${new Date(r.timestamp).toLocaleDateString()}) ${r.content}`
-        )
-        .join("\n");
-
-    return {
-        success: true,
-        data: results,
-        displayMessage: `🔍 Found ${results.length} relevant memories:\n${formattedResults}`,
-    };
-}
-
-async function executeSetReminder(
-    args: Record<string, unknown>
-): Promise<ToolResult> {
-    const message = String(args.message || "Reminder");
-    const timeStr = String(args.time || "30m");
-
-    // Parse the time
-    let triggerTime: Date;
-
-    // Check if it's a duration string (e.g., "30m", "2h")
-    const durationMatch = timeStr.match(/^(\d+)\s*(m|min|h|hr|hour|s|sec)$/i);
-    if (durationMatch) {
-        const amount = parseInt(durationMatch[1]);
-        const unit = durationMatch[2].toLowerCase();
-        const now = new Date();
-
-        if (unit.startsWith("h")) {
-            triggerTime = new Date(now.getTime() + amount * 60 * 60 * 1000);
-        } else if (unit.startsWith("m")) {
-            triggerTime = new Date(now.getTime() + amount * 60 * 1000);
-        } else {
-            triggerTime = new Date(now.getTime() + amount * 1000);
-        }
-    } else {
-        // Try to parse as ISO date
-        triggerTime = new Date(timeStr);
-        if (isNaN(triggerTime.getTime())) {
-            // Default to 30 minutes from now
-            triggerTime = new Date(Date.now() + 30 * 60 * 1000);
-        }
-    }
-
-    const reminder: Reminder = {
-        id: uuidv4(),
-        message,
-        triggerTime: triggerTime.toISOString(),
-        fired: false,
-        createdAt: new Date().toISOString(),
-    };
-
-    await db.saveReminder(reminder);
-
-    // Schedule the browser notification
-    scheduleNotification(reminder);
-
-    const timeUntil = Math.round(
-        (triggerTime.getTime() - Date.now()) / 60000
-    );
-
-    return {
-        success: true,
-        data: reminder,
-        displayMessage: `⏰ Reminder set: "${message}" — in ~${timeUntil} minutes`,
-    };
-}
-
-function executeGetCurrentDate(): ToolResult {
-    const now = new Date();
-    const formatted = now.toLocaleString("en-US", {
-        weekday: "long",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZoneName: "short",
-    });
-
-    return {
-        success: true,
-        data: { iso: now.toISOString(), formatted },
-        displayMessage: `📅 Current date & time: ${formatted}`,
-    };
-}
-
-async function executeGetTasks(): Promise<ToolResult> {
-    const tasks = await db.getAllTasks();
-    if (tasks.length === 0) {
-        return {
-            success: true,
-            data: [],
-            displayMessage: `📝 You have no tasks.`,
-        };
-    }
-
-    const formattedTasks = tasks.map((t, i) => `${i + 1}. [${t.status}] ${t.name} (Priority: ${t.priority})`).join("\n");
-    return {
-        success: true,
-        data: tasks,
-        displayMessage: `📝 Here are your tasks:\n${formattedTasks}`,
-    };
-}
-
-async function executeGetHabits(): Promise<ToolResult> {
-    const habits = await db.getAllHabits();
-    if (habits.length === 0) {
-        return {
-            success: true,
-            data: [],
-            displayMessage: `🔥 You have no habits tracking.`,
-        };
-    }
-
-    const formattedHabits = habits.map((h, i) => `${i + 1}. ${h.name} (Streak: ${h.streak} days, Frequency: ${h.frequency})`).join("\n");
-    return {
-        success: true,
-        data: habits,
-        displayMessage: `🔥 Here are your habits:\n${formattedHabits}`,
-    };
-}
-
-// ============================================================
-// Helpers
-// ============================================================
-
-function validatePriority(priority: string): TaskPriority {
-    const valid: TaskPriority[] = ["low", "medium", "high", "urgent"];
-    const p = priority.toLowerCase() as TaskPriority;
-    return valid.includes(p) ? p : "medium";
-}
-
-function validateHabitStatus(status: string): "done" | "skipped" | "missed" | "paused" {
-    const valid = ["done", "skipped", "missed", "paused"] as const;
-    const s = status.toLowerCase() as (typeof valid)[number];
-    return valid.includes(s) ? s : "done";
-}
-
-function validateTimeOfDay(time: string): "morning" | "afternoon" | "evening" | "any" {
-    const valid = ["morning", "afternoon", "evening", "any"] as const;
-    const t = time.toLowerCase() as (typeof valid)[number];
-    return valid.includes(t) ? t : "any";
-}
-
-function validateFrequencyType(type: string): "daily" | "weekly" | "monthly" | "x_per_week" {
-    const valid = ["daily", "weekly", "monthly", "x_per_week"] as const;
-    const t = type.toLowerCase() as (typeof valid)[number];
-    return valid.includes(t) ? t : "daily";
-}
-
-function validateMood(mood: string): Mood {
-    const valid: Mood[] = ["great", "good", "okay", "bad", "terrible"];
-    const m = mood.toLowerCase() as Mood;
-    return valid.includes(m) ? m : "okay";
-}
-
-/**
- * Schedules a browser notification using the Notification API.
- * Falls back gracefully if permissions aren't granted.
- */
 function scheduleNotification(reminder: Reminder): void {
-    if (typeof window === "undefined") return;
-
-    const delay = new Date(reminder.triggerTime).getTime() - Date.now();
-    if (delay <= 0) return;
-
-    // Request permission if needed
-    if ("Notification" in window && Notification.permission === "default") {
-        Notification.requestPermission();
-    }
+    const timeUntil = new Date(reminder.time).getTime() - Date.now();
+    if (timeUntil <= 0) return;
 
     setTimeout(() => {
-        if ("Notification" in window && Notification.permission === "granted") {
-            new Notification("🧠 LocalMind Reminder", {
-                body: reminder.message,
-                icon: "/icons/icon-192.png",
-                badge: "/icons/icon-192.png",
-                tag: reminder.id,
-            });
+        if (typeof window !== "undefined" && "Notification" in window) {
+            if (Notification.permission === "granted") {
+                new Notification("LocalMind Reminder", {
+                    body: reminder.message,
+                    icon: "/icons/icon-192.png",
+                });
+            }
         }
-
-        // Mark as fired in DB
-        reminder.fired = true;
-        db.saveReminder(reminder);
-    }, delay);
+        // Mark as completed
+        db.updateReminder(reminder.id, { completed: true });
+    }, Math.min(timeUntil, 2147483647)); // Cap at max setTimeout value
 }
 
 /**
- * Generates COMPACT tool definitions for the system prompt.
- * Shorter = less prefill = faster first token.
+ * Restore all pending reminders on page load
  */
-export function getToolDefinitionsForPrompt(): string {
-    return [
-        "- create_task(name, due_date?, priority?): Create a task",
-        "- log_habit(name, status, note?): Log habit status (done/skipped/missed/paused)",
-        "- create_habit(name, category?, timeOfDay?, frequencyType?, frequencyTimes?): Create a habit to track",
-        "- write_journal(entry, mood): Save journal entry with mood",
-        "- search_memory(query): Search past tasks/chats/habits/journal",
-        "- set_reminder(message, time): Set browser notification (e.g. '30m', '2h')",
-        "- get_current_date(): Get current date and time",
-        "- get_tasks(): List all tasks",
-        "- get_habits(): List all habits",
-    ].join("\n");
+export async function restoreReminders(): Promise<void> {
+    const reminders = await db.getAllReminders();
+    for (const reminder of reminders) {
+        if (!reminder.completed) {
+            const timeUntil = new Date(reminder.time).getTime() - Date.now();
+            if (timeUntil > 0) {
+                scheduleNotification(reminder);
+            } else {
+                // Overdue -- mark completed and notify
+                await db.updateReminder(reminder.id, { completed: true });
+                if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+                    new Notification("LocalMind Reminder (overdue)", {
+                        body: reminder.message,
+                        icon: "/icons/icon-192.png",
+                    });
+                }
+            }
+        }
+    }
+}
+
+// ================================================================
+// Tool Execution
+// ================================================================
+
+export async function executeTool(toolCall: ToolCall): Promise<ToolResult> {
+    const { name, args } = toolCall;
+
+    try {
+        switch (name) {
+            // ========== Tasks ==========
+            case "create_task": {
+                const taskName = (args.name as string) || "";
+                if (!taskName.trim()) {
+                    return { success: false, message: "Task name is required." };
+                }
+                const priority = (args.priority as TaskPriority) || "medium";
+                const task = await db.createTask(
+                    taskName.trim(),
+                    priority,
+                    args.description as string,
+                    args.due_date as string,
+                    args.tags ? (args.tags as string).split(",").map((t: string) => t.trim()) : undefined
+                );
+                return {
+                    success: true,
+                    message: `Task created: "${task.name}" [${task.priority} priority]${task.dueDate ? " due " + task.dueDate : ""}`,
+                    data: task,
+                };
+            }
+
+            case "complete_task": {
+                const searchName = (args.name as string) || "";
+                if (!searchName.trim()) {
+                    return { success: false, message: "Task name is required." };
+                }
+                const allTasks = await db.getAllTasks();
+                const found = fuzzyMatch(allTasks, searchName);
+                if (!found) {
+                    return { success: false, message: `No task found matching "${searchName}".` };
+                }
+                await db.updateTask(found.id, { status: "done" });
+                return {
+                    success: true,
+                    message: `Task completed: "${found.name}"`,
+                    data: { ...found, status: "done" },
+                };
+            }
+
+            case "update_task": {
+                const searchName = (args.name as string) || "";
+                if (!searchName.trim()) {
+                    return { success: false, message: "Task name is required." };
+                }
+                const tasks = await db.getAllTasks();
+                const taskToUpdate = fuzzyMatch(tasks, searchName);
+                if (!taskToUpdate) {
+                    return { success: false, message: `No task found matching "${searchName}".` };
+                }
+                const updates: Partial<Task> = {};
+                if (args.new_name) updates.name = args.new_name as string;
+                if (args.priority) updates.priority = args.priority as TaskPriority;
+                if (args.due_date) updates.dueDate = args.due_date as string;
+                if (args.description) updates.description = args.description as string;
+                if (args.status) updates.status = args.status as Task["status"];
+                const updated = await db.updateTask(taskToUpdate.id, updates);
+                return {
+                    success: true,
+                    message: `Task updated: "${updated?.name || taskToUpdate.name}"`,
+                    data: updated,
+                };
+            }
+
+            case "delete_task": {
+                const searchName = (args.name as string) || "";
+                if (!searchName.trim()) {
+                    return { success: false, message: "Task name is required." };
+                }
+                const tasks = await db.getAllTasks();
+                const taskToDelete = fuzzyMatch(tasks, searchName);
+                if (!taskToDelete) {
+                    return { success: false, message: `No task found matching "${searchName}".` };
+                }
+                await db.deleteTask(taskToDelete.id);
+                return {
+                    success: true,
+                    message: `Task deleted: "${taskToDelete.name}"`,
+                };
+            }
+
+            case "get_tasks": {
+                const tasks = await db.getAllTasks();
+                const statusFilter = args.status as string;
+                const filtered = statusFilter
+                    ? tasks.filter((t) => t.status === statusFilter)
+                    : tasks;
+
+                if (filtered.length === 0) {
+                    return {
+                        success: true,
+                        message: statusFilter
+                            ? `No ${statusFilter} tasks found.`
+                            : "No tasks yet. Create one by telling me what you need to do!",
+                    };
+                }
+
+                const taskList = filtered
+                    .map((t) => {
+                        const due = t.dueDate ? ` (due: ${t.dueDate})` : "";
+                        return `- [${t.status}] ${t.name} [${t.priority}]${due}`;
+                    })
+                    .join("\n");
+                return {
+                    success: true,
+                    message: `Found ${filtered.length} task(s):\n${taskList}`,
+                    data: filtered,
+                };
+            }
+
+            // ========== Habits ==========
+            case "create_habit": {
+                const habitName = (args.name as string) || "";
+                if (!habitName.trim()) {
+                    return { success: false, message: "Habit name is required." };
+                }
+                const freq = (args.frequency as Habit["frequency"]) || "daily";
+                const habit = await db.createHabit(
+                    habitName.trim(),
+                    freq,
+                    args.description as string,
+                    args.category as string,
+                    args.time_of_day as Habit["timeOfDay"]
+                );
+                return {
+                    success: true,
+                    message: `Habit created: "${habit.name}" (${typeof habit.frequency === 'string' ? habit.frequency : 'custom'})`,
+                    data: habit,
+                };
+            }
+
+            case "log_habit": {
+                const searchName = (args.name as string) || "";
+                if (!searchName.trim()) {
+                    return { success: false, message: "Habit name is required." };
+                }
+                const habits = await db.getAllHabits();
+                const habitToLog = fuzzyMatch(habits, searchName);
+                if (!habitToLog) {
+                    return { success: false, message: `No habit found matching "${searchName}".` };
+                }
+                const logStatus = (args.status as "done" | "skipped" | "missed") || "done";
+                const logged = await db.logHabit(habitToLog.id, logStatus, args.note as string);
+                if (!logged) {
+                    return { success: false, message: "Failed to log habit." };
+                }
+                const streakMsg = logged.streak > 0 ? ` Streak: ${logged.streak} day(s)!` : "";
+                return {
+                    success: true,
+                    message: `Habit logged: "${logged.name}" -- ${logStatus}.${streakMsg}`,
+                    data: logged,
+                };
+            }
+
+            case "delete_habit": {
+                const searchName = (args.name as string) || "";
+                if (!searchName.trim()) {
+                    return { success: false, message: "Habit name is required." };
+                }
+                const habits = await db.getAllHabits();
+                const habitToDelete = fuzzyMatch(habits, searchName);
+                if (!habitToDelete) {
+                    return { success: false, message: `No habit found matching "${searchName}".` };
+                }
+                await db.deleteHabit(habitToDelete.id);
+                return {
+                    success: true,
+                    message: `Habit deleted: "${habitToDelete.name}"`,
+                };
+            }
+
+            case "get_habits": {
+                const habits = await db.getAllHabits();
+                if (habits.length === 0) {
+                    return {
+                        success: true,
+                        message: "No habits tracked yet. Tell me a habit you'd like to build!",
+                    };
+                }
+                const today = new Date().toISOString().split("T")[0];
+                const habitList = habits
+                    .map((h) => {
+                        const todayLog = h.logs.find((l) => l.date === today);
+                        const todayStatus = todayLog ? todayLog.status : "not logged";
+                        const freq = typeof h.frequency === 'string' ? h.frequency : 'custom';
+                        return `- ${h.name} (${freq}) -- Today: ${todayStatus}, Streak: ${h.streak}, Best: ${h.longestStreak}`;
+                    })
+                    .join("\n");
+                return {
+                    success: true,
+                    message: `${habits.length} habit(s):\n${habitList}`,
+                    data: habits,
+                };
+            }
+
+            // ========== Journal ==========
+            case "write_journal": {
+                const entryText = (args.entry as string) || "";
+                if (!entryText.trim()) {
+                    return { success: false, message: "Journal entry text is required." };
+                }
+                const mood = (args.mood as "great" | "good" | "okay" | "bad" | "terrible") || "okay";
+                const tags = args.tags
+                    ? (args.tags as string).split(",").map((t: string) => t.trim())
+                    : undefined;
+                const entry = await db.createJournalEntry(entryText.trim(), mood, tags);
+                return {
+                    success: true,
+                    message: `Journal entry saved. Mood: ${mood}.${tags ? " Tags: " + tags.join(", ") : ""}`,
+                    data: entry,
+                };
+            }
+
+            case "get_journal_entries": {
+                const limit = (args.limit as number) || 5;
+                const moodFilter = args.mood as string;
+                let entries = await db.getAllJournalEntries();
+                if (moodFilter) {
+                    entries = entries.filter((e) => e.mood === moodFilter);
+                }
+                entries = entries.slice(0, limit);
+                if (entries.length === 0) {
+                    return {
+                        success: true,
+                        message: moodFilter
+                            ? `No journal entries with mood "${moodFilter}".`
+                            : "No journal entries yet. Share your thoughts and I'll save them!",
+                    };
+                }
+                const entryList = entries
+                    .map((e) => {
+                        const date = new Date(e.createdAt).toLocaleDateString();
+                        const preview = e.entry.length > 80 ? e.entry.substring(0, 80) + "..." : e.entry;
+                        return `- [${date}] (${e.mood}) ${preview}`;
+                    })
+                    .join("\n");
+                return {
+                    success: true,
+                    message: `${entries.length} journal entry/entries:\n${entryList}`,
+                    data: entries,
+                };
+            }
+
+            // ========== Reminders ==========
+            case "set_reminder": {
+                const message = (args.message as string) || "";
+                const time = (args.time as string) || "";
+                if (!message.trim() || !time.trim()) {
+                    return { success: false, message: "Reminder message and time are required." };
+                }
+                const repeat = (args.repeat as Reminder["repeat"]) || "none";
+                const reminder = await db.createReminder(message.trim(), time, repeat);
+                scheduleNotification(reminder);
+
+                const reminderTime = new Date(time);
+                const timeStr = reminderTime.toLocaleString();
+                return {
+                    success: true,
+                    message: `Reminder set: "${reminder.message}" at ${timeStr}${repeat !== "none" ? " (repeats " + repeat + ")" : ""}`,
+                    data: reminder,
+                };
+            }
+
+            case "get_reminders": {
+                const showCompleted = args.show_completed as boolean || false;
+                let reminders = await db.getAllReminders();
+                if (!showCompleted) {
+                    reminders = reminders.filter((r) => !r.completed);
+                }
+                if (reminders.length === 0) {
+                    return {
+                        success: true,
+                        message: showCompleted
+                            ? "No reminders found."
+                            : "No active reminders. Tell me when you need to be reminded about something!",
+                    };
+                }
+                const now = Date.now();
+                const reminderList = reminders
+                    .map((r) => {
+                        const time = new Date(r.time);
+                        const isPast = time.getTime() < now;
+                        const status = r.completed ? "done" : isPast ? "OVERDUE" : "pending";
+                        return `- [${status}] "${r.message}" at ${time.toLocaleString()}${r.repeat !== "none" ? " (repeats " + r.repeat + ")" : ""}`;
+                    })
+                    .join("\n");
+                return {
+                    success: true,
+                    message: `${reminders.length} reminder(s):\n${reminderList}`,
+                    data: reminders,
+                };
+            }
+
+            case "cancel_reminder": {
+                const searchMsg = (args.message as string) || "";
+                if (!searchMsg.trim()) {
+                    return { success: false, message: "Reminder message is required to find it." };
+                }
+                const reminders = await db.getAllReminders();
+                const active = reminders.filter((r) => !r.completed);
+                const found = fuzzyMatchReminder(active, searchMsg);
+                if (!found) {
+                    return { success: false, message: `No active reminder found matching "${searchMsg}".` };
+                }
+                await db.deleteReminder(found.id);
+                return {
+                    success: true,
+                    message: `Reminder cancelled: "${found.message}"`,
+                };
+            }
+
+            // ========== Utility ==========
+            case "search_memory": {
+                const query = (args.query as string) || "";
+                if (!query.trim()) {
+                    return { success: false, message: "Search query is required." };
+                }
+                const { searchMemory } = await import("./memory");
+                const results = await searchMemory(query);
+                if (results.length === 0) {
+                    return {
+                        success: true,
+                        message: `No memories found for "${query}".`,
+                    };
+                }
+                const memList = results
+                    .slice(0, 5)
+                    .map((r) => `- [${r.timestamp}] (relevance: ${Math.round(r.relevance * 100)}%) ${r.content}`)
+                    .join("\n");
+                return {
+                    success: true,
+                    message: `Found ${results.length} memory/memories:\n${memList}`,
+                    data: results,
+                };
+            }
+
+            case "get_current_date": {
+                const now = new Date();
+                return {
+                    success: true,
+                    message: `Current date and time: ${now.toLocaleDateString("en-US", {
+                        weekday: "long",
+                        year: "numeric",
+                        month: "long",
+                        day: "numeric",
+                    })} at ${now.toLocaleTimeString("en-US", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                    })}`,
+                };
+            }
+
+            default:
+                return { success: false, message: `Unknown tool: ${name}` };
+        }
+    } catch (error) {
+        console.error(`[Tools] Error executing ${name}:`, error);
+        return {
+            success: false,
+            message: `Error executing ${name}: ${error instanceof Error ? error.message : "Unknown error"}`,
+        };
+    }
 }
