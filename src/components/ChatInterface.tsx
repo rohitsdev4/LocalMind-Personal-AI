@@ -16,12 +16,15 @@ import {
     Paperclip,
     ArrowDown,
     Zap,
+    Menu,
 } from "lucide-react";
 import { MessageBubble, ThinkingIndicator } from "./MessageBubble";
 import { DownloadProgress } from "./DownloadProgress";
 import { SettingsModal } from "./SettingsModal";
 import { InstallPrompt } from "./InstallPrompt";
 import { useWebLLM } from "@/hooks/useWebLLM";
+import db from "@/lib/db";
+import { Sidebar } from "./Sidebar";
 
 // ============================================================
 // Quick action suggestions for empty state
@@ -66,6 +69,7 @@ export function ChatInterface() {
     const [showSettings, setShowSettings] = useState(false);
     const [showScrollButton, setShowScrollButton] = useState(false);
     const [currentModel, setCurrentModel] = useState("SmolLM2-360M-Instruct-q4f16_1-MLC");
+    const [showSidebar, setShowSidebar] = useState(false);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -73,6 +77,19 @@ export function ChatInterface() {
 
     // Visible messages (exclude system messages)
     const visibleMessages = messages.filter((m) => m.role !== "system");
+
+    // ============================================================
+    // Check API Key on Load
+    // ============================================================
+    useEffect(() => {
+        const checkApiKey = async () => {
+            const settings = await db.getSettings();
+            if (!settings.openRouterApiKey) {
+                setShowSettings(true);
+            }
+        };
+        checkApiKey();
+    }, []);
 
     // ============================================================
     // Auto-scroll to bottom on new messages
@@ -175,6 +192,12 @@ export function ChatInterface() {
                 <div className="absolute inset-0 bg-gradient-to-r from-brand-500/5 via-transparent to-accent-purple/5" />
 
                 <div className="relative flex items-center gap-3">
+                    <button
+                        onClick={() => setShowSidebar(true)}
+                        className="p-2 -ml-2 rounded-xl text-white/60 hover:text-white hover:bg-white/10 transition-all"
+                    >
+                        <Menu className="w-5 h-5" />
+                    </button>
                     <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-500 to-accent-purple flex items-center justify-center shadow-lg shadow-brand-500/20">
                         <Brain className="w-5 h-5 text-white" />
                     </div>
@@ -390,6 +413,11 @@ export function ChatInterface() {
 
             {/* PWA Install Prompt */}
             <InstallPrompt />
+
+            <Sidebar
+                isOpen={showSidebar}
+                onClose={() => setShowSidebar(false)}
+            />
 
             {/* Hide scrollbar globally */}
             <style jsx global>{`

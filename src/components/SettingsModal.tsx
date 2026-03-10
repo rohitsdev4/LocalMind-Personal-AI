@@ -52,6 +52,9 @@ export function SettingsModal({
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [deleting, setDeleting] = useState(false);
     const [apiKey, setApiKey] = useState("");
+    const [isConnecting, setIsConnecting] = useState(false);
+    const [connectionStatus, setConnectionStatus] = useState<"idle" | "success" | "error">("idle");
+    const [connectionMessage, setConnectionMessage] = useState("");
 
     useEffect(() => {
         if (isOpen) {
@@ -72,6 +75,8 @@ export function SettingsModal({
     const handleApiKeyChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const newKey = e.target.value;
         setApiKey(newKey);
+        setConnectionStatus("idle");
+        setConnectionMessage("");
         if (settings) {
             const newSettings: UserSettings = {
                 ...settings,
@@ -79,6 +84,43 @@ export function SettingsModal({
             };
             await db.saveSettings(newSettings);
             setSettings(newSettings);
+        }
+    };
+
+    const handleConnectApiKey = async () => {
+        if (!apiKey) {
+            setConnectionStatus("error");
+            setConnectionMessage("Please enter an API key first.");
+            return;
+        }
+
+        setIsConnecting(true);
+        setConnectionStatus("idle");
+        setConnectionMessage("");
+
+        try {
+            const res = await fetch("https://openrouter.ai/api/v1/auth/key", {
+                method: "GET",
+                headers: {
+                    "Authorization": `Bearer ${apiKey}`,
+                },
+            });
+
+            if (res.ok) {
+                setConnectionStatus("success");
+                setConnectionMessage("Connected successfully!");
+                setTimeout(() => {
+                    onClose();
+                }, 1000);
+            } else {
+                setConnectionStatus("error");
+                setConnectionMessage("Invalid API key or connection failed.");
+            }
+        } catch {
+            setConnectionStatus("error");
+            setConnectionMessage("Failed to reach OpenRouter API.");
+        } finally {
+            setIsConnecting(false);
         }
     };
 
@@ -115,23 +157,23 @@ export function SettingsModal({
 
     const MODELS = [
         {
-            id: "google/gemini-2.5-flash:free",
-            name: "Gemini 2.5 Flash",
-            desc: "Fast and lightweight",
+            id: "meta-llama/llama-3.3-70b-instruct:free",
+            name: "Llama 3.3 70B",
+            desc: "Great quality for reasoning",
             size: "Free",
             recommended: true,
+        },
+        {
+            id: "google/gemini-2.5-flash",
+            name: "Gemini 2.5 Flash",
+            desc: "Fast and lightweight",
+            size: "Standard",
+            recommended: false,
         },
         {
             id: "deepseek/deepseek-chat:free",
             name: "DeepSeek V3",
             desc: "High performance chat model",
-            size: "Free",
-            recommended: false,
-        },
-        {
-            id: "meta-llama/llama-3.3-70b-instruct:free",
-            name: "Llama 3.3 70B",
-            desc: "Great quality for reasoning",
             size: "Free",
             recommended: false,
         },
@@ -182,14 +224,28 @@ export function SettingsModal({
                                 <label className="text-sm font-medium text-white/70">
                                     API Key
                                 </label>
-                                <input
-                                    type="password"
-                                    value={apiKey}
-                                    onChange={handleApiKeyChange}
-                                    placeholder="sk-or-v1-..."
-                                    className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none focus:border-brand-500 transition-colors"
-                                />
-                                <p className="text-xs text-white/30">
+                                <div className="flex gap-2">
+                                    <input
+                                        type="password"
+                                        value={apiKey}
+                                        onChange={handleApiKeyChange}
+                                        placeholder="sk-or-v1-..."
+                                        className="flex-1 px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none focus:border-brand-500 transition-colors"
+                                    />
+                                    <button
+                                        onClick={handleConnectApiKey}
+                                        disabled={isConnecting || !apiKey}
+                                        className="px-4 py-2 bg-brand-500 hover:bg-brand-600 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+                                    >
+                                        {isConnecting ? "Connecting..." : "Connect"}
+                                    </button>
+                                </div>
+                                {connectionMessage && (
+                                    <p className={`text-xs mt-1 ${connectionStatus === "success" ? "text-accent-emerald" : "text-accent-rose"}`}>
+                                        {connectionMessage}
+                                    </p>
+                                )}
+                                <p className="text-xs text-white/30 mt-1">
                                     Get your free key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:underline">openrouter.ai</a>
                                 </p>
                             </div>
