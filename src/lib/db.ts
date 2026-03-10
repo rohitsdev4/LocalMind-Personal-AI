@@ -1,257 +1,382 @@
-// ============================================================
-// LocalMind — Database Layer (localforage / IndexedDB)
-// Persistent, offline-first storage for all app data
-// ============================================================
+// ================================================================
+// LocalMind -- Database Layer (IndexedDB via localforage)
+// All persistent storage operations
+// ================================================================
 
 import localforage from "localforage";
-import type {
+import { v4 as uuidv4 } from "uuid";
+import {
     ChatSession,
+    ChatMessage,
     Task,
+    TaskPriority,
+    TaskStatus,
     Habit,
+    HabitLog,
     JournalEntry,
+    Mood,
     UserSettings,
     Reminder,
-    ID,
 } from "./types";
 
-// ============================================================
+// ================================================================
 // Store Initialization
-// Each data type gets its own IndexedDB store for isolation
-// ============================================================
+// ================================================================
 
-const chatStore = localforage.createInstance({
-    name: "localmind",
-    storeName: "chats",
-    description: "Chat sessions and message history",
-});
+const chatStore = localforage.createInstance({ name: "localmind", storeName: "chats" });
+const taskStore = localforage.createInstance({ name: "localmind", storeName: "tasks" });
+const habitStore = localforage.createInstance({ name: "localmind", storeName: "habits" });
+const journalStore = localforage.createInstance({ name: "localmind", storeName: "journal" });
+const settingsStore = localforage.createInstance({ name: "localmind", storeName: "settings" });
+const reminderStore = localforage.createInstance({ name: "localmind", storeName: "reminders" });
+const memoryStore = localforage.createInstance({ name: "localmind", storeName: "memory" });
 
-const taskStore = localforage.createInstance({
-    name: "localmind",
-    storeName: "tasks",
-    description: "Task management",
-});
-
-const habitStore = localforage.createInstance({
-    name: "localmind",
-    storeName: "habits",
-    description: "Habit tracking",
-});
-
-const journalStore = localforage.createInstance({
-    name: "localmind",
-    storeName: "journal",
-    description: "Journal entries",
-});
-
-const settingsStore = localforage.createInstance({
-    name: "localmind",
-    storeName: "settings",
-    description: "User preferences",
-});
-
-const reminderStore = localforage.createInstance({
-    name: "localmind",
-    storeName: "reminders",
-    description: "Scheduled reminders",
-});
-
-const memoryStore = localforage.createInstance({
-    name: "localmind",
-    storeName: "memory",
-    description: "Conversation summaries for long-term memory",
-});
-
-// ============================================================
+// ================================================================
 // Default Settings
-// ============================================================
+// ================================================================
 
 const DEFAULT_SETTINGS: UserSettings = {
     selectedModel: "meta-llama/llama-3.3-70b-instruct:free",
     theme: "dark",
     notificationsEnabled: true,
-    maxContextMessages: 8,
+    maxContextMessages: 50,
     openRouterApiKey: "",
 };
 
-// ============================================================
-// Chat Operations
-// ============================================================
+// ================================================================
+// Settings
+// ================================================================
 
-export const db = {
-    // --- Chats ---
-    async getChatSession(id: ID): Promise<ChatSession | null> {
-        return chatStore.getItem<ChatSession>(id);
-    },
+export async function getSettings(): Promise<UserSettings> {
+    const stored = await settingsStore.getItem<UserSettings>("user_settings");
+    return { ...DEFAULT_SETTINGS, ...stored };
+}
 
-    async saveChatSession(session: ChatSession): Promise<void> {
-        await chatStore.setItem(session.id, session);
-    },
+export async function updateSettings(partial: Partial<UserSettings>): Promise<UserSettings> {
+    const current = await getSettings();
+    const updated = { ...current, ...partial };
+    await settingsStore.setItem("user_settings", updated);
+    return updated;
+}
 
-    async getAllChatSessions(): Promise<ChatSession[]> {
-        const sessions: ChatSession[] = [];
-        await chatStore.iterate<ChatSession, void>((value) => {
-            sessions.push(value);
-        });
-        return sessions.sort(
-            (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-        );
-    },
+// ================================================================
+// Chat Sessions
+// ================================================================
 
-    async deleteChatSession(id: ID): Promise<void> {
-        await chatStore.removeItem(id);
-    },
+export async function getChatSession(id: string = "current_session"): Promise<ChatSession> {
+    const session = await chatStore.getItem<ChatSession>(id);
+    if (session) return session;
+    const newSession: ChatSession = {
+        id,
+        title: "New Chat",
+        messages: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        summaries: [],
+    };
+    await chatStore.setItem(id, newSession);
+    return newSession;
+}
 
-    async clearAllChats(): Promise<void> {
-        await chatStore.clear();
-    },
+export async function saveChatSession(session: ChatSession): Promise<void> {
+    session.updatedAt = new Date().toISOString();
+    await chatStore.setItem(session.id, session);
+}
 
-    // --- Tasks ---
-    async getTask(id: ID): Promise<Task | null> {
-        return taskStore.getItem<Task>(id);
-    },
+export async function clearChatSession(id: string = "current_session"): Promise<void> {
+    await chatStore.removeItem(id);
+}
 
-    async saveTask(task: Task): Promise<void> {
-        await taskStore.setItem(task.id, task);
-    },
+// ================================================================
+// Tasks
+// ================================================================
 
-    async getAllTasks(): Promise<Task[]> {
-        const tasks: Task[] = [];
-        await taskStore.iterate<Task, void>((value) => {
-            tasks.push(value);
-        });
-        return tasks.sort(
-            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        );
-    },
+export async function getAllTasks(): Promise<Task[]> {
+    const tasks: Task[] = [];
+    await taskStore.iterate<Task, void>((value) => {
+        tasks.push(value);
+    });
+    return tasks.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
 
-    async deleteTask(id: ID): Promise<void> {
-        await taskStore.removeItem(id);
-    },
+export async function createTask(
+    name: string,
+    priority: TaskPriority = "medium",
+    description?: string,
+    dueDate?: string,
+    tags?: string[]
+): Promise<Task> {
+    const task: Task = {
+        id: uuidv4(),
+        name,
+        description,
+        dueDate,
+        priority,
+        status: "pending",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        tags,
+    };
+    await taskStore.setItem(task.id, task);
+    return task;
+}
 
-    // --- Habits ---
-    async getHabit(id: ID): Promise<Habit | null> {
-        return habitStore.getItem<Habit>(id);
-    },
+export async function updateTask(id: string, updates: Partial<Task>): Promise<Task | null> {
+    const task = await taskStore.getItem<Task>(id);
+    if (!task) return null;
+    const updated = { ...task, ...updates, updatedAt: new Date().toISOString() };
+    await taskStore.setItem(id, updated);
+    return updated;
+}
 
-    async saveHabit(habit: Habit): Promise<void> {
-        await habitStore.setItem(habit.id, habit);
-    },
+export async function deleteTask(id: string): Promise<boolean> {
+    const task = await taskStore.getItem<Task>(id);
+    if (!task) return false;
+    await taskStore.removeItem(id);
+    return true;
+}
 
-    async getAllHabits(): Promise<Habit[]> {
-        const habits: Habit[] = [];
-        await habitStore.iterate<Habit, void>((value) => {
-            habits.push(value);
-        });
-        return habits;
-    },
+// ================================================================
+// Habits
+// ================================================================
 
-    async deleteHabit(id: ID): Promise<void> {
-        await habitStore.removeItem(id);
-    },
+export async function getAllHabits(): Promise<Habit[]> {
+    const habits: Habit[] = [];
+    await habitStore.iterate<Habit, void>((value) => {
+        habits.push(value);
+    });
+    return habits.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
 
-    // --- Journal ---
-    async saveJournalEntry(entry: JournalEntry): Promise<void> {
-        await journalStore.setItem(entry.id, entry);
-    },
+export async function createHabit(
+    name: string,
+    frequency: Habit["frequency"] = "daily",
+    description?: string,
+    category?: string,
+    timeOfDay?: Habit["timeOfDay"]
+): Promise<Habit> {
+    const habit: Habit = {
+        id: uuidv4(),
+        name,
+        description,
+        category,
+        timeOfDay,
+        frequency,
+        logs: [],
+        streak: 0,
+        longestStreak: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+    };
+    await habitStore.setItem(habit.id, habit);
+    return habit;
+}
 
-    async getAllJournalEntries(): Promise<JournalEntry[]> {
-        const entries: JournalEntry[] = [];
-        await journalStore.iterate<JournalEntry, void>((value) => {
-            entries.push(value);
-        });
-        return entries.sort(
-            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        );
-    },
+export async function logHabit(
+    id: string,
+    status: HabitLog["status"] = "done",
+    note?: string
+): Promise<Habit | null> {
+    const habit = await habitStore.getItem<Habit>(id);
+    if (!habit) return null;
 
-    async deleteJournalEntry(id: ID): Promise<void> {
-        await journalStore.removeItem(id);
-    },
+    const today = new Date().toISOString().split("T")[0];
+    // Remove existing log for today if any
+    habit.logs = habit.logs.filter((l) => l.date !== today);
+    habit.logs.push({ date: today, status, note });
 
-    // --- Reminders ---
-    async saveReminder(reminder: Reminder): Promise<void> {
-        await reminderStore.setItem(reminder.id, reminder);
-    },
+    // Recalculate streak with gap detection
+    habit.streak = calculateStreak(habit.logs);
+    if (habit.streak > habit.longestStreak) {
+        habit.longestStreak = habit.streak;
+    }
 
-    async getAllReminders(): Promise<Reminder[]> {
-        const reminders: Reminder[] = [];
-        await reminderStore.iterate<Reminder, void>((value) => {
-            reminders.push(value);
-        });
-        return reminders;
-    },
+    habit.updatedAt = new Date().toISOString();
+    await habitStore.setItem(id, habit);
+    return habit;
+}
 
-    async deleteReminder(id: ID): Promise<void> {
-        await reminderStore.removeItem(id);
-    },
+function calculateStreak(logs: HabitLog[]): number {
+    const doneLogs = logs
+        .filter((l) => l.status === "done")
+        .map((l) => l.date)
+        .sort()
+        .reverse();
 
-    // --- Settings ---
-    async getSettings(): Promise<UserSettings> {
-        const settings = await settingsStore.getItem<UserSettings>("user_settings");
-        return settings || DEFAULT_SETTINGS;
-    },
+    if (doneLogs.length === 0) return 0;
 
-    async saveSettings(settings: UserSettings): Promise<void> {
-        await settingsStore.setItem("user_settings", settings);
-    },
+    const today = new Date().toISOString().split("T")[0];
+    // Streak must include today or yesterday
+    const lastLog = doneLogs[0];
+    const daysSinceLastLog = Math.floor(
+        (new Date(today).getTime() - new Date(lastLog).getTime()) / (1000 * 60 * 60 * 24)
+    );
+    if (daysSinceLastLog > 1) return 0;
 
-    // --- Memory (Long-Term Summaries) ---
-    async saveMemorySummary(id: ID, summary: string): Promise<void> {
-        await memoryStore.setItem(id, {
-            summary,
-            timestamp: new Date().toISOString(),
-        });
-    },
+    let streak = 1;
+    for (let i = 1; i < doneLogs.length; i++) {
+        const current = new Date(doneLogs[i - 1]).getTime();
+        const previous = new Date(doneLogs[i]).getTime();
+        const diffDays = Math.floor((current - previous) / (1000 * 60 * 60 * 24));
+        if (diffDays === 1) {
+            streak++;
+        } else {
+            break;
+        }
+    }
+    return streak;
+}
 
-    async getAllMemorySummaries(): Promise<{ summary: string; timestamp: string }[]> {
-        const summaries: { summary: string; timestamp: string }[] = [];
-        await memoryStore.iterate<{ summary: string; timestamp: string }, void>((value) => {
-            summaries.push(value);
-        });
-        return summaries.sort(
-            (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-        );
-    },
+export async function updateHabit(id: string, updates: Partial<Habit>): Promise<Habit | null> {
+    const habit = await habitStore.getItem<Habit>(id);
+    if (!habit) return null;
+    const updated = { ...habit, ...updates, updatedAt: new Date().toISOString() };
+    await habitStore.setItem(id, updated);
+    return updated;
+}
 
-    async clearMemory(): Promise<void> {
-        await memoryStore.clear();
-    },
+export async function deleteHabit(id: string): Promise<boolean> {
+    const habit = await habitStore.getItem<Habit>(id);
+    if (!habit) return false;
+    await habitStore.removeItem(id);
+    return true;
+}
 
-    // --- Storage Info ---
-    async getStorageUsage(): Promise<{
-        chats: number;
-        tasks: number;
-        habits: number;
-        journal: number;
-        reminders: number;
-        memory: number;
-    }> {
-        const countStore = async (store: LocalForage): Promise<number> => {
-            return store.length();
-        };
+// ================================================================
+// Journal
+// ================================================================
 
-        return {
-            chats: await countStore(chatStore),
-            tasks: await countStore(taskStore),
-            habits: await countStore(habitStore),
-            journal: await countStore(journalStore),
-            reminders: await countStore(reminderStore),
-            memory: await countStore(memoryStore),
-        };
-    },
+export async function getAllJournalEntries(): Promise<JournalEntry[]> {
+    const entries: JournalEntry[] = [];
+    await journalStore.iterate<JournalEntry, void>((value) => {
+        entries.push(value);
+    });
+    return entries.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
 
-    // --- Nuclear Option ---
-    async clearAllData(): Promise<void> {
-        await Promise.all([
-            chatStore.clear(),
-            taskStore.clear(),
-            habitStore.clear(),
-            journalStore.clear(),
-            settingsStore.clear(),
-            reminderStore.clear(),
-            memoryStore.clear(),
-        ]);
-    },
-};
+export async function createJournalEntry(
+    entry: string,
+    mood: Mood = "okay",
+    tags?: string[]
+): Promise<JournalEntry> {
+    const journalEntry: JournalEntry = {
+        id: uuidv4(),
+        entry,
+        mood,
+        tags,
+        createdAt: new Date().toISOString(),
+    };
+    await journalStore.setItem(journalEntry.id, journalEntry);
+    return journalEntry;
+}
 
-export default db;
+export async function deleteJournalEntry(id: string): Promise<boolean> {
+    const entry = await journalStore.getItem<JournalEntry>(id);
+    if (!entry) return false;
+    await journalStore.removeItem(id);
+    return true;
+}
+
+// ================================================================
+// Reminders
+// ================================================================
+
+export async function getAllReminders(): Promise<Reminder[]> {
+    const reminders: Reminder[] = [];
+    await reminderStore.iterate<Reminder, void>((value) => {
+        reminders.push(value);
+    });
+    return reminders.sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+}
+
+export async function createReminder(
+    message: string,
+    time: string,
+    repeat: Reminder["repeat"] = "none"
+): Promise<Reminder> {
+    const reminder: Reminder = {
+        id: uuidv4(),
+        message,
+        time,
+        repeat,
+        completed: false,
+        createdAt: new Date().toISOString(),
+    };
+    await reminderStore.setItem(reminder.id, reminder);
+    return reminder;
+}
+
+export async function updateReminder(id: string, updates: Partial<Reminder>): Promise<Reminder | null> {
+    const reminder = await reminderStore.getItem<Reminder>(id);
+    if (!reminder) return null;
+    const updated = { ...reminder, ...updates };
+    await reminderStore.setItem(id, updated);
+    return updated;
+}
+
+export async function deleteReminder(id: string): Promise<boolean> {
+    const reminder = await reminderStore.getItem<Reminder>(id);
+    if (!reminder) return false;
+    await reminderStore.removeItem(id);
+    return true;
+}
+
+// ================================================================
+// Memory (for AI context summaries)
+// ================================================================
+
+export async function getMemorySummaries(): Promise<string[]> {
+    const summaries = await memoryStore.getItem<string[]>("summaries");
+    return summaries || [];
+}
+
+export async function saveMemorySummary(summary: string): Promise<void> {
+    const summaries = await getMemorySummaries();
+    summaries.push(summary);
+    // Keep last 50 summaries
+    if (summaries.length > 50) {
+        summaries.splice(0, summaries.length - 50);
+    }
+    await memoryStore.setItem("summaries", summaries);
+}
+
+export async function clearMemorySummaries(): Promise<void> {
+    await memoryStore.setItem("summaries", []);
+}
+
+// ================================================================
+// Storage Usage
+// ================================================================
+
+export async function getStorageUsage(): Promise<{
+    tasks: number;
+    habits: number;
+    journal: number;
+    reminders: number;
+    chats: number;
+    memory: number;
+}> {
+    let tasks = 0, habits = 0, journal = 0, reminders = 0, chats = 0, memory = 0;
+    await taskStore.iterate(() => { tasks++; });
+    await habitStore.iterate(() => { habits++; });
+    await journalStore.iterate(() => { journal++; });
+    await reminderStore.iterate(() => { reminders++; });
+    await chatStore.iterate(() => { chats++; });
+    const summaries = await getMemorySummaries();
+    memory = summaries.length;
+    return { tasks, habits, journal, reminders, chats, memory };
+}
+
+// ================================================================
+// Clear All Data
+// ================================================================
+
+export async function clearAllData(): Promise<void> {
+    await chatStore.clear();
+    await taskStore.clear();
+    await habitStore.clear();
+    await journalStore.clear();
+    await settingsStore.clear();
+    await reminderStore.clear();
+    await memoryStore.clear();
+}
