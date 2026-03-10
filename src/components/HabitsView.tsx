@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import db from "@/lib/db";
+import * as db from "@/lib/db";
 import type { Habit } from "@/lib/types";
 import { Flame, ListPlus, BarChart3, CheckCircle2, XCircle, PauseCircle, MessageSquare, Trash2 } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
