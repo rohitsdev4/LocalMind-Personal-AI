@@ -1,67 +1,77 @@
-import React from "react";
-import { MessageSquare, ListTodo, Flame, Bell, BookHeart, X } from "lucide-react";
+"use client";
+
+import { MessageSquare, ListTodo, Flame, Bell, BookOpen, X } from "lucide-react";
+
+export type SidebarView = "chat" | "tasks" | "habits" | "reminders" | "journal";
 
 interface SidebarProps {
     isOpen: boolean;
+    currentView: SidebarView;
+    onNavigate: (view: SidebarView) => void;
     onClose: () => void;
-    onFeatureSelect: (featureId: string) => void;
-    activeFeature: string;
 }
 
-const MENU_ITEMS = [
-    { id: "chat", icon: MessageSquare, label: "Chat", color: "text-brand-400" },
-    { id: "tasks", icon: ListTodo, label: "Tasks", color: "text-accent-teal" },
-    { id: "habits", icon: Flame, label: "Habits", color: "text-accent-amber" },
-    { id: "reminders", icon: Bell, label: "Reminders", color: "text-accent-purple" },
-    { id: "journal", icon: BookHeart, label: "Journal", color: "text-accent-pink" },
+const NAV_ITEMS: { view: SidebarView; label: string; icon: typeof MessageSquare }[] = [
+    { view: "chat", label: "Chat", icon: MessageSquare },
+    { view: "tasks", label: "Tasks", icon: ListTodo },
+    { view: "habits", label: "Habits", icon: Flame },
+    { view: "reminders", label: "Reminders", icon: Bell },
+    { view: "journal", label: "Journal", icon: BookOpen },
 ];
 
-export function Sidebar({ isOpen, onClose, onFeatureSelect, activeFeature }: SidebarProps) {
-    if (!isOpen) return null;
-
-    const handleFeatureClick = (featureId: string) => {
-        onFeatureSelect(featureId);
-        onClose();
-    };
-
+export function Sidebar({ isOpen, currentView, onNavigate, onClose }: SidebarProps) {
     return (
-        <div className="fixed inset-0 z-50 flex">
-            <div
-                className="fixed inset-0 bg-black/60 backdrop-blur-sm animate-fade-in"
-                onClick={onClose}
-            />
+        <>
+            {/* Backdrop */}
+            {isOpen && (
+                <div
+                    className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+                    onClick={onClose}
+                />
+            )}
 
-            <div className="relative w-64 h-full bg-surface-100 border-r border-white/10 shadow-2xl flex flex-col animate-slide-right">
-                <div className="flex items-center justify-between p-4 border-b border-white/5">
-                    <h2 className="text-lg font-bold text-white tracking-tight">Features</h2>
+            {/* Sidebar panel */}
+            <aside
+                className={`fixed top-0 left-0 h-full w-64 bg-gray-900 border-r border-gray-800 z-50 transform transition-transform duration-200 ease-in-out ${
+                    isOpen ? "translate-x-0" : "-translate-x-full"
+                }`}
+            >
+                <div className="flex items-center justify-between p-4 border-b border-gray-800">
+                    <h2 className="text-lg font-semibold text-white">LocalMind</h2>
                     <button
                         onClick={onClose}
-                        className="p-2 rounded-xl text-white/50 hover:text-white hover:bg-white/10 transition-all"
+                        className="p-1 rounded hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
                     >
-                        <X className="w-5 h-5" />
+                        <X size={20} />
                     </button>
                 </div>
 
-                <div className="flex-1 overflow-y-auto py-4">
-                    <div className="px-3 space-y-1">
-                        {MENU_ITEMS.map((item) => {
-                            const Icon = item.icon;
-                            return (
-                                <button
-                                    key={item.id}
-                                    onClick={() => handleFeatureClick(item.id)}
-                                    className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-white/5 transition-all group ${activeFeature === item.id ? "bg-white/10 text-white" : "text-white/70 hover:text-white"}`}
-                                >
-                                    <div className={`p-2 rounded-lg bg-white/[0.03] group-hover:bg-white/10 ${item.color} transition-all ${activeFeature === item.id ? "bg-white/10" : ""}`}>
-                                        <Icon className="w-4 h-4" />
-                                    </div>
-                                    <span className="text-sm font-medium">{item.label}</span>
-                                </button>
-                            );
-                        })}
-                    </div>
+                <nav className="p-2 space-y-1">
+                    {NAV_ITEMS.map(({ view, label, icon: Icon }) => (
+                        <button
+                            key={view}
+                            onClick={() => {
+                                onNavigate(view);
+                                onClose();
+                            }}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                                currentView === view
+                                    ? "bg-purple-600/20 text-purple-400"
+                                    : "text-gray-400 hover:bg-gray-800 hover:text-white"
+                            }`}
+                        >
+                            <Icon size={18} />
+                            {label}
+                        </button>
+                    ))}
+                </nav>
+
+                <div className="absolute bottom-4 left-0 right-0 px-4">
+                    <p className="text-xs text-gray-600 text-center">
+                        LocalMind v2.0 -- AI Life Assistant
+                    </p>
                 </div>
-            </div>
-        </div>
+            </aside>
+        </>
     );
 }
