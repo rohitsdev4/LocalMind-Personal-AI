@@ -6,6 +6,8 @@
 // ============================================================
 
 import React from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { ChatMessage } from "@/lib/types";
 import {
     Bot,
@@ -108,13 +110,45 @@ export function MessageBubble({ message, isLatest }: MessageBubbleProps) {
     if (isAssistant) {
         return (
             <div className={`flex justify-start mb-3 animate-fade-in ${isLatest ? "animate-slide-up" : ""}`}>
-                <div className="flex items-end gap-2 max-w-[85%]">
+                <div className="flex items-end gap-2 max-w-[85%] w-full">
                     <div className="flex-shrink-0 w-7 h-7 rounded-full bg-gradient-to-br from-accent-purple/30 to-accent-pink/30 flex items-center justify-center">
                         <Sparkles className="w-3.5 h-3.5 text-accent-purple" />
                     </div>
-                    <div className="bg-surface-100/80 border border-white/5 text-white rounded-2xl rounded-bl-md px-4 py-3 backdrop-blur-sm">
-                        <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                            {formatAssistantContent(message.content)}
+                    <div className="bg-surface-100/80 border border-white/5 text-white rounded-2xl rounded-bl-md px-4 py-3 backdrop-blur-sm w-full overflow-hidden">
+                        <div className="text-sm leading-relaxed break-words">
+                            <ReactMarkdown
+                                remarkPlugins={[remarkGfm]}
+                                components={{
+                                    p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                                    strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+                                    ul: ({ children }) => <ul className="list-disc list-inside mb-2">{children}</ul>,
+                                    ol: ({ children }) => <ol className="list-decimal list-inside mb-2">{children}</ol>,
+                                    li: ({ children }) => <li className="mb-1">{children}</li>,
+                                    a: ({ children, href }) => (
+                                        <a href={href} target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:underline">
+                                            {children}
+                                        </a>
+                                    ),
+                                    code: (props) => {
+                                        // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any
+                                        const { inline, className, children, node, ref, ...rest } = props as any;
+                                        return !inline ? (
+                                            <pre className="bg-black/50 p-3 rounded-lg overflow-x-auto text-xs my-2 border border-white/10">
+                                                <code className={className} {...rest}>
+                                                    {children}
+                                                </code>
+                                            </pre>
+                                        ) : (
+                                            <code className="bg-black/30 px-1 py-0.5 rounded text-xs text-accent-pink" {...rest}>
+                                                {children}
+                                            </code>
+                                        );
+                                    },
+                                    pre: ({ children }) => <>{children}</>,
+                                }}
+                            >
+                                {message.content}
+                            </ReactMarkdown>
                         </div>
                         <span className="block text-[10px] text-white/25 mt-1.5">
                             {formatTime(message.timestamp)}
@@ -179,19 +213,5 @@ function formatTime(timestamp: string): string {
     }
 }
 
-function formatAssistantContent(content: string): React.ReactNode {
-    // Simple markdown-like formatting for assistant messages
-    const parts = content.split(/(\*\*[^*]+\*\*)/g);
-    return parts.map((part, i) => {
-        if (part.startsWith("**") && part.endsWith("**")) {
-            return (
-                <strong key={i} className="font-semibold text-white">
-                    {part.slice(2, -2)}
-                </strong>
-            );
-        }
-        return part;
-    });
-}
 
 export default MessageBubble;
