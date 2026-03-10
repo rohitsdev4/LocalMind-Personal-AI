@@ -66,7 +66,7 @@ const memoryStore = localforage.createInstance({
 // ============================================================
 
 const DEFAULT_SETTINGS: UserSettings = {
-    selectedModel: "google/gemini-2.5-flash:free",
+    selectedModel: "meta-llama/llama-3.3-70b-instruct:free",
     theme: "dark",
     notificationsEnabled: true,
     maxContextMessages: 8,
