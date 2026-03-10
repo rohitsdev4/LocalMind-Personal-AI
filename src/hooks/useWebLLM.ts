@@ -110,7 +110,9 @@ export function useWebLLM(): UseWebLLMReturn {
                 // Get context window
                 const settings = await db.getSettings();
 
-                if (!settings.openRouterApiKey) {
+                const apiKey = settings.openRouterApiKey || process.env.OPENROUTER_API_KEY;
+
+                if (!apiKey) {
                     throw new Error("OpenRouter API Key is missing. Please enter it in Settings.");
                 }
 
@@ -144,25 +146,80 @@ export function useWebLLM(): UseWebLLMReturn {
 
                 let fullContent = "";
 
-                // Use OpenRouter streaming API
-                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-                    method: "POST",
-                    headers: {
-                        "Authorization": `Bearer ${settings.openRouterApiKey}`,
-                        "HTTP-Referer": window.location.href,
-                        "X-Title": "LocalMind",
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({
-                        model: settings.selectedModel,
-                        messages: llmMessages,
-                        stream: true,
-                    }),
-                    signal: abortRef.current.signal,
-                });
+                // Use OpenRouter streaming API with retry logic
+                let response: Response | null = null;
+                let retryCount = 0;
+                const maxRetries = 3;
+
+                while (retryCount <= maxRetries) {
+                    try {
+                        response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                            method: "POST",
+                            headers: {
+                                "Authorization": `Bearer ${apiKey}`,
+                                "HTTP-Referer": window.location.href,
+                                "X-Title": "LocalMind",
+                                "Content-Type": "application/json"
+                            },
+                            body: JSON.stringify({
+                                model: settings.selectedModel,
+                                messages: llmMessages,
+                                stream: true,
+                            }),
+                            signal: abortRef.current.signal,
+                        });
+
+                        if (response.ok) {
+                            break;
+                        }
+
+                        if (response.status === 429) {
+                            if (retryCount < maxRetries) {
+                                retryCount++;
+                                const delay = Math.pow(2, retryCount) * 1000;
+                                console.log(`Rate limited (429). Retrying in ${delay}ms... (Attempt ${retryCount} of ${maxRetries})`);
+
+                                setMessages((prev) =>
+                                    prev.map((m) =>
+                                        m.id === assistantMsgId
+                                            ? { ...m, content: "The AI is a bit busy right now. Retrying in a few seconds..." }
+                                            : m
+                                    )
+                                );
+
+                                await new Promise(resolve => setTimeout(resolve, delay));
+                                continue;
+                            }
+                        }
+
+                        // If it's not a 429 or we're out of retries, break and handle the error below
+                        break;
+                    } catch (err) {
+                        // Check if it's an abort error, if so, just throw it to be handled by the outer catch
+                        if (err instanceof Error && err.name === 'AbortError') {
+                            throw err;
+                        }
+
+                        if (retryCount < maxRetries) {
+                            retryCount++;
+                            const delay = Math.pow(2, retryCount) * 1000;
+                            console.log(`Network error. Retrying in ${delay}ms... (Attempt ${retryCount} of ${maxRetries})`);
+                            await new Promise(resolve => setTimeout(resolve, delay));
+                        } else {
+                            throw err;
+                        }
+                    }
+                }
+
+                if (!response) {
+                    throw new Error("Failed to get a response from OpenRouter API.");
+                }
 
                 if (!response.ok) {
                     const errorText = await response.text();
+                    if (response.status === 429) {
+                         throw new Error(`OpenRouter API error (429): Rate-limited. The AI is still busy after several attempts. Please try again later. (${errorText})`);
+                    }
                     throw new Error(`OpenRouter API error (${response.status}): ${errorText}`);
                 }
 
@@ -313,13 +370,20 @@ export function useWebLLM(): UseWebLLMReturn {
                 if (err instanceof Error && err.name === 'AbortError') return;
 
                 const errMsg = err instanceof Error ? err.message : String(err);
-                setError(`Generation error: ${errMsg}`);
+
+                let userFriendlyError = `I encountered an error. Please try again. (${errMsg})`;
+
+                if (errMsg.includes("429") || errMsg.toLowerCase().includes("rate-limited")) {
+                    userFriendlyError = "The AI is still busy after several attempts. Please try again later.";
+                }
+
+                setError(`Generation error: ${userFriendlyError}`);
                 console.error("Generation error:", err);
 
                 const errorMessage: ChatMessage = {
                     id: uuidv4(),
                     role: "assistant",
-                    content: `I encountered an error. Please try again. (${errMsg})`,
+                    content: userFriendlyError,
                     timestamp: new Date().toISOString(),
                 };
                 setMessages((prev) => [...prev, errorMessage]);
@@ -344,7 +408,9 @@ export function useWebLLM(): UseWebLLMReturn {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         result: any
     ) {
-        if (!settings.openRouterApiKey) return;
+        const apiKey = settings.openRouterApiKey || process.env.OPENROUTER_API_KEY;
+
+        if (!apiKey) return;
 
         const contextInjection = {
             role: "system" as const,
@@ -368,7 +434,7 @@ export function useWebLLM(): UseWebLLMReturn {
             const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
                 method: "POST",
                 headers: {
-                    "Authorization": `Bearer ${settings.openRouterApiKey}`,
+                    "Authorization": `Bearer ${apiKey}`,
                     "HTTP-Referer": window.location.href,
                     "X-Title": "LocalMind",
                     "Content-Type": "application/json"
