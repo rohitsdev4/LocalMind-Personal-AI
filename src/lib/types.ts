@@ -88,7 +88,10 @@ export interface JournalEntry {
     id: ID;
     entry: string;
     mood: Mood;
+    energyLevel?: number; // 0-100 or 1-5 scale
     tags?: string[];
+    gratitude?: string[]; // Array of up to 3 strings
+    photos?: string[]; // Array of base64 encoded strings
     createdAt: Timestamp;
 }
 
@@ -103,6 +106,7 @@ export interface UserSettings {
     maxContextMessages: number;
     installedAt?: Timestamp;
     openRouterApiKey?: string;
+    journalPin?: string; // Hashed PIN for encrypting journal
 }
 
 // ============================================================

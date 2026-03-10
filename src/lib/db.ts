@@ -13,6 +13,14 @@ import type {
     Reminder,
     ID,
 } from "./types";
+import { encryptData, decryptData } from "./crypto";
+
+let globalJournalPin: string | null = null;
+
+// Call this from the UI when the user unlocks their journal
+export function setJournalUnlockPin(pin: string | null) {
+    globalJournalPin = pin;
+}
 
 // ============================================================
 // Store Initialization
@@ -151,13 +159,35 @@ export const db = {
 
     // --- Journal ---
     async saveJournalEntry(entry: JournalEntry): Promise<void> {
-        await journalStore.setItem(entry.id, entry);
+        // Encrypt the sensitive content if we have a pin
+        const entryToSave = { ...entry };
+        if (globalJournalPin) {
+            entryToSave.entry = encryptData(entry.entry, globalJournalPin);
+            if (entry.gratitude && entry.gratitude.length > 0) {
+                entryToSave.gratitude = entry.gratitude.map(g => encryptData(g, globalJournalPin!));
+            }
+            if (entry.photos && entry.photos.length > 0) {
+                entryToSave.photos = entry.photos.map(p => encryptData(p, globalJournalPin!));
+            }
+        }
+        await journalStore.setItem(entryToSave.id, entryToSave);
     },
 
     async getAllJournalEntries(): Promise<JournalEntry[]> {
         const entries: JournalEntry[] = [];
         await journalStore.iterate<JournalEntry, void>((value) => {
-            entries.push(value);
+            // Decrypt the sensitive content if we have a pin
+            const entryToLoad = { ...value };
+            if (globalJournalPin) {
+                entryToLoad.entry = decryptData(value.entry, globalJournalPin);
+                if (value.gratitude && value.gratitude.length > 0) {
+                    entryToLoad.gratitude = value.gratitude.map(g => decryptData(g, globalJournalPin!));
+                }
+                if (value.photos && value.photos.length > 0) {
+                    entryToLoad.photos = value.photos.map(p => decryptData(p, globalJournalPin!));
+                }
+            }
+            entries.push(entryToLoad);
         });
         return entries.sort(
             (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
