@@ -130,6 +130,7 @@ export function useWebLLM(): UseWebLLMReturn {
                             | "user"
                             | "assistant",
                         content: m.content,
+                        ...(m.reasoning_details ? { reasoning_details: m.reasoning_details } : {})
                     }));
 
                 // ====== STREAMING GENERATION ======
@@ -165,6 +166,7 @@ export function useWebLLM(): UseWebLLMReturn {
                                 model: settings.selectedModel,
                                 messages: llmMessages,
                                 stream: true,
+                                reasoning: { enabled: true },
                             }),
                             signal: abortRef.current.signal,
                         });
@@ -230,6 +232,7 @@ export function useWebLLM(): UseWebLLMReturn {
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = "";
+                let reasoningContent = "";
 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -252,12 +255,23 @@ export function useWebLLM(): UseWebLLMReturn {
                             try {
                                 const parsed = JSON.parse(data);
                                 const delta = parsed.choices?.[0]?.delta?.content || "";
-                                if (delta) {
-                                    fullContent += delta;
+                                const reasoningDelta = parsed.choices?.[0]?.delta?.reasoning || "";
+
+                                if (reasoningDelta) {
+                                    reasoningContent += reasoningDelta;
+                                }
+
+                                if (delta || reasoningDelta) {
+                                    if (delta) fullContent += delta;
+
                                     setMessages((prev) =>
                                         prev.map((m) =>
                                             m.id === assistantMsgId
-                                                ? { ...m, content: fullContent }
+                                                ? {
+                                                    ...m,
+                                                    content: fullContent,
+                                                    ...(reasoningContent ? { reasoning_details: reasoningContent } : {})
+                                                  }
                                                 : m
                                         )
                                     );
@@ -276,12 +290,23 @@ export function useWebLLM(): UseWebLLMReturn {
                         try {
                             const parsed = JSON.parse(data);
                             const delta = parsed.choices?.[0]?.delta?.content || "";
-                            if (delta) {
-                                fullContent += delta;
+                            const reasoningDelta = parsed.choices?.[0]?.delta?.reasoning || "";
+
+                            if (reasoningDelta) {
+                                reasoningContent += reasoningDelta;
+                            }
+
+                            if (delta || reasoningDelta) {
+                                if (delta) fullContent += delta;
+
                                 setMessages((prev) =>
                                     prev.map((m) =>
                                         m.id === assistantMsgId
-                                            ? { ...m, content: fullContent }
+                                            ? {
+                                                ...m,
+                                                content: fullContent,
+                                                ...(reasoningContent ? { reasoning_details: reasoningContent } : {})
+                                              }
                                             : m
                                     )
                                 );
@@ -443,6 +468,7 @@ export function useWebLLM(): UseWebLLMReturn {
                     model: settings.selectedModel,
                     messages: [...baseMsgs, contextInjection],
                     stream: true,
+                    reasoning: { enabled: true },
                 }),
                 signal: abortRef.current?.signal,
             });
@@ -452,6 +478,7 @@ export function useWebLLM(): UseWebLLMReturn {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = "";
+            let reasoningContent = "";
 
             while (true) {
                 const { done, value } = await reader.read();
@@ -472,12 +499,23 @@ export function useWebLLM(): UseWebLLMReturn {
                         try {
                             const parsed = JSON.parse(data);
                             const delta = parsed.choices?.[0]?.delta?.content || "";
-                            if (delta) {
-                                followUpContent += delta;
+                            const reasoningDelta = parsed.choices?.[0]?.delta?.reasoning || "";
+
+                            if (reasoningDelta) {
+                                reasoningContent += reasoningDelta;
+                            }
+
+                            if (delta || reasoningDelta) {
+                                if (delta) followUpContent += delta;
+
                                 setMessages((prev) =>
                                     prev.map((m) =>
                                         m.id === followUpId
-                                            ? { ...m, content: followUpContent }
+                                            ? {
+                                                ...m,
+                                                content: followUpContent,
+                                                ...(reasoningContent ? { reasoning_details: reasoningContent } : {})
+                                              }
                                             : m
                                     )
                                 );
@@ -495,12 +533,23 @@ export function useWebLLM(): UseWebLLMReturn {
                     try {
                         const parsed = JSON.parse(data);
                         const delta = parsed.choices?.[0]?.delta?.content || "";
-                        if (delta) {
-                            followUpContent += delta;
+                        const reasoningDelta = parsed.choices?.[0]?.delta?.reasoning || "";
+
+                        if (reasoningDelta) {
+                            reasoningContent += reasoningDelta;
+                        }
+
+                        if (delta || reasoningDelta) {
+                            if (delta) followUpContent += delta;
+
                             setMessages((prev) =>
                                 prev.map((m) =>
                                     m.id === followUpId
-                                        ? { ...m, content: followUpContent }
+                                        ? {
+                                            ...m,
+                                            content: followUpContent,
+                                            ...(reasoningContent ? { reasoning_details: reasoningContent } : {})
+                                          }
                                         : m
                                 )
                             );

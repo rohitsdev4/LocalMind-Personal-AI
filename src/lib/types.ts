@@ -26,6 +26,8 @@ export interface ChatMessage {
     toolResult?: unknown;
     /** Whether this message is a summary of older messages */
     isSummary?: boolean;
+    /** Preserved reasoning from models that support it */
+    reasoning_details?: string;
 }
 
 export interface ChatSession {
