@@ -169,6 +169,10 @@ export const db = {
     },
 
     // --- Reminders ---
+    async getReminder(id: ID): Promise<Reminder | null> {
+        return reminderStore.getItem<Reminder>(id);
+    },
+
     async saveReminder(reminder: Reminder): Promise<void> {
         await reminderStore.setItem(reminder.id, reminder);
     },

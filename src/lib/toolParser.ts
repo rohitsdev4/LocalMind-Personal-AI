@@ -25,6 +25,7 @@ const VALID_TOOLS = new Set([
     "get_current_date",
     "get_tasks",
     "get_habits",
+    "get_reminders",
 ]);
 
 /**
@@ -179,7 +180,7 @@ export function generateRetryPrompt(failedText: string): string {
 export function looksLikeFailedToolCall(text: string): boolean {
     const indicators = [
         /tool_call/i,
-        /"name"\s*:\s*"(create_task|log_habit|write_journal|search_memory|set_reminder|get_current_date|get_tasks|get_habits)"/i,
+        /"name"\s*:\s*"(create_task|log_habit|write_journal|search_memory|set_reminder|get_current_date|get_tasks|get_habits|get_reminders)"/i,
         /\{[^}]*"name"[^}]*"args"/i,
     ];
 

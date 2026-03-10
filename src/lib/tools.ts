@@ -15,6 +15,8 @@ import type {
     JournalEntry,
     Mood,
     Reminder,
+    ReminderRepeat,
+    ReminderPriority,
 } from "./types";
 
 // ============================================================
@@ -96,7 +98,29 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
                     "When to trigger the reminder. Either a duration like '30m', '2h' or an ISO datetime string.",
                 required: true,
             },
+            repeat: {
+                type: "string",
+                description: "Repeat frequency: none, daily, weekly, monthly, yearly. Defaults to none.",
+            },
+            priority: {
+                type: "string",
+                description: "Priority: low, medium, high, urgent. Defaults to medium.",
+            },
+            category: {
+                type: "string",
+                description: "Category of the reminder.",
+            },
+            taskId: {
+                type: "string",
+                description: "ID of an associated task, if any.",
+            }
         },
+    },
+    {
+        name: "get_reminders",
+        description:
+            "Returns a list of all current reminders. Use when the user asks what reminders they have.",
+        parameters: {},
     },
     {
         name: "get_current_date",
@@ -141,6 +165,8 @@ export async function executeTool(toolCall: ToolCall): Promise<ToolResult> {
                 return await executeGetTasks();
             case "get_habits":
                 return await executeGetHabits();
+            case "get_reminders":
+                return await executeGetReminders();
             default:
                 return {
                     success: false,
@@ -318,6 +344,14 @@ async function executeSetReminder(
 ): Promise<ToolResult> {
     const message = String(args.message || "Reminder");
     const timeStr = String(args.time || "30m");
+    const repeatStr = String(args.repeat || "none");
+    const priorityStr = String(args.priority || "medium");
+    const category = args.category ? String(args.category) : undefined;
+    const taskId = args.taskId ? String(args.taskId) : undefined;
+
+    // Parse repeat and priority
+    const repeat = validateReminderRepeat(repeatStr);
+    const priority = validateReminderPriority(priorityStr);
 
     // Parse the time
     let triggerTime: Date;
@@ -351,6 +385,11 @@ async function executeSetReminder(
         triggerTime: triggerTime.toISOString(),
         fired: false,
         createdAt: new Date().toISOString(),
+        repeat,
+        priority,
+        category,
+        taskId,
+        status: "active"
     };
 
     await db.saveReminder(reminder);
@@ -358,14 +397,14 @@ async function executeSetReminder(
     // Schedule the browser notification
     scheduleNotification(reminder);
 
-    const timeUntil = Math.round(
+    const timeUntil = Math.max(0, Math.round(
         (triggerTime.getTime() - Date.now()) / 60000
-    );
+    ));
 
     return {
         success: true,
         data: reminder,
-        displayMessage: `⏰ Reminder set: "${message}" — in ~${timeUntil} minutes`,
+        displayMessage: `⏰ Reminder set: "${message}" — in ~${timeUntil} minutes (Repeat: ${repeat})`,
     };
 }
 
@@ -424,6 +463,31 @@ async function executeGetHabits(): Promise<ToolResult> {
     };
 }
 
+async function executeGetReminders(): Promise<ToolResult> {
+    const reminders = await db.getAllReminders();
+    if (reminders.length === 0) {
+        return {
+            success: true,
+            data: [],
+            displayMessage: `⏰ You have no active reminders.`,
+        };
+    }
+
+    // Sort by trigger time, earliest first
+    reminders.sort((a, b) => new Date(a.triggerTime).getTime() - new Date(b.triggerTime).getTime());
+
+    const formattedReminders = reminders.map((r, i) => {
+        const timeStr = new Date(r.triggerTime).toLocaleString();
+        return `${i + 1}. [${r.status || (r.fired ? 'fired' : 'active')}] ${r.message} at ${timeStr} (Repeat: ${r.repeat || 'none'})`;
+    }).join("\n");
+
+    return {
+        success: true,
+        data: reminders,
+        displayMessage: `⏰ Here are your reminders:\n${formattedReminders}`,
+    };
+}
+
 // ============================================================
 // Helpers
 // ============================================================
@@ -446,8 +510,20 @@ function validateMood(mood: string): Mood {
     return valid.includes(m) ? m : "okay";
 }
 
+function validateReminderRepeat(repeat: string): ReminderRepeat {
+    const valid: ReminderRepeat[] = ["none", "daily", "weekly", "monthly", "yearly"];
+    const r = repeat.toLowerCase() as ReminderRepeat;
+    return valid.includes(r) ? r : "none";
+}
+
+function validateReminderPriority(priority: string): ReminderPriority {
+    const valid: ReminderPriority[] = ["low", "medium", "high", "urgent"];
+    const p = priority.toLowerCase() as ReminderPriority;
+    return valid.includes(p) ? p : "medium";
+}
+
 /**
- * Schedules a browser notification using the Notification API.
+ * Schedules a browser notification using the Notification API and Service Worker if available.
  * Falls back gracefully if permissions aren't granted.
  */
 function scheduleNotification(reminder: Reminder): void {
@@ -461,19 +537,58 @@ function scheduleNotification(reminder: Reminder): void {
         Notification.requestPermission();
     }
 
-    setTimeout(() => {
+    setTimeout(async () => {
         if ("Notification" in window && Notification.permission === "granted") {
-            new Notification("🧠 LocalMind Reminder", {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const options: any = {
                 body: reminder.message,
                 icon: "/icons/icon-192.png",
                 badge: "/icons/icon-192.png",
                 tag: reminder.id,
-            });
+                data: { reminderId: reminder.id },
+                actions: [
+                    { action: 'snooze-5m', title: 'Snooze 5m' },
+                    { action: 'snooze-1h', title: 'Snooze 1h' },
+                    { action: 'dismiss', title: 'Dismiss' }
+                ]
+            };
+
+            // Try to use service worker for rich notifications (actions)
+            if ('serviceWorker' in navigator) {
+                try {
+                    const registration = await navigator.serviceWorker.ready;
+                    await registration.showNotification("🧠 LocalMind Reminder", options);
+                } catch (e) {
+                    console.error("SW Notification error:", e);
+                    // Fallback to basic notification
+                    new Notification("🧠 LocalMind Reminder", {
+                        body: reminder.message,
+                        icon: "/icons/icon-192.png",
+                        badge: "/icons/icon-192.png",
+                        tag: reminder.id,
+                    });
+                }
+            } else {
+                new Notification("🧠 LocalMind Reminder", {
+                    body: reminder.message,
+                    icon: "/icons/icon-192.png",
+                    badge: "/icons/icon-192.png",
+                    tag: reminder.id,
+                });
+            }
         }
 
         // Mark as fired in DB
-        reminder.fired = true;
-        db.saveReminder(reminder);
+        const latestReminder = await db.getReminder(reminder.id);
+        if (latestReminder) {
+            latestReminder.fired = true;
+            latestReminder.status = "fired";
+            await db.saveReminder(latestReminder);
+        } else {
+            reminder.fired = true;
+            reminder.status = "fired";
+            await db.saveReminder(reminder);
+        }
     }, delay);
 }
 
@@ -487,9 +602,10 @@ export function getToolDefinitionsForPrompt(): string {
         "- log_habit(name, status): Log habit as done/skipped/missed",
         "- write_journal(entry, mood): Save journal entry with mood",
         "- search_memory(query): Search past tasks/chats/habits/journal",
-        "- set_reminder(message, time): Set browser notification (e.g. '30m', '2h')",
+        "- set_reminder(message, time, repeat?, priority?, category?, taskId?): Set browser notification (time e.g. '30m', '2h', or ISO)",
         "- get_current_date(): Get current date and time",
         "- get_tasks(): List all tasks",
         "- get_habits(): List all habits",
+        "- get_reminders(): List all reminders",
     ].join("\n");
 }

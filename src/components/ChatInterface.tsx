@@ -23,8 +23,10 @@ import { DownloadProgress } from "./DownloadProgress";
 import { SettingsModal } from "./SettingsModal";
 import { InstallPrompt } from "./InstallPrompt";
 import { useWebLLM } from "@/hooks/useWebLLM";
+import { useReminders } from "@/hooks/useReminders";
 import db from "@/lib/db";
 import { Sidebar } from "./Sidebar";
+import { CheckCircle, Clock, Bell } from "lucide-react";
 
 // ============================================================
 // Quick action suggestions for empty state
@@ -53,7 +55,11 @@ const SUGGESTIONS = [
     },
 ];
 
-export function ChatInterface() {
+interface ChatInterfaceProps {
+    onOpenSidebar?: () => void;
+}
+
+export function ChatInterface({ onOpenSidebar }: ChatInterfaceProps) {
     const {
         status,
         messages,
@@ -77,6 +83,9 @@ export function ChatInterface() {
 
     // Visible messages (exclude system messages)
     const visibleMessages = messages.filter((m) => m.role !== "system");
+
+    // Reminders Hook for active toast
+    const { activeToast, dismissReminder, snoozeReminder, dismissToast } = useReminders();
 
     // ============================================================
     // Check API Key on Load
@@ -193,7 +202,7 @@ export function ChatInterface() {
 
                 <div className="relative flex items-center gap-3">
                     <button
-                        onClick={() => setShowSidebar(true)}
+                        onClick={onOpenSidebar || (() => setShowSidebar(true))}
                         className="p-2 -ml-2 rounded-xl text-white/60 hover:text-white hover:bg-white/10 transition-all"
                     >
                         <Menu className="w-5 h-5" />
@@ -411,12 +420,53 @@ export function ChatInterface() {
                 currentModel={currentModel}
             />
 
+            {/* In-App Reminder Toast */}
+            {activeToast && (
+                <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 animate-slide-down">
+                    <div className="bg-surface-200 border border-brand-500/50 rounded-2xl p-4 shadow-2xl shadow-brand-500/20 backdrop-blur-xl flex flex-col gap-3 min-w-[300px]">
+                        <div className="flex items-start justify-between">
+                            <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-full bg-brand-500/20 flex items-center justify-center">
+                                    <Bell className="w-4 h-4 text-brand-400" />
+                                </div>
+                                <div>
+                                    <p className="text-xs text-brand-400 font-semibold uppercase tracking-wider">Reminder</p>
+                                    <h3 className="text-white font-medium text-base">{activeToast.message}</h3>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2 mt-2">
+                            <button
+                                onClick={() => dismissReminder(activeToast.id)}
+                                className="flex-1 py-2 bg-brand-500 hover:bg-brand-600 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-1"
+                            >
+                                <CheckCircle className="w-4 h-4" /> Done
+                            </button>
+                            <button
+                                onClick={() => snoozeReminder(activeToast.id, 60)}
+                                className="flex-1 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-sm font-medium transition-colors flex items-center justify-center gap-1"
+                            >
+                                <Clock className="w-4 h-4" /> Snooze 1h
+                            </button>
+                            <button
+                                onClick={dismissToast}
+                                className="px-3 py-2 bg-transparent hover:bg-white/5 text-white/50 hover:text-white rounded-xl text-sm font-medium transition-colors"
+                            >
+                                Dismiss
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* PWA Install Prompt */}
             <InstallPrompt />
 
             <Sidebar
                 isOpen={showSidebar}
                 onClose={() => setShowSidebar(false)}
+                currentView="chat"
+                onViewChange={() => {}}
             />
 
             {/* Hide scrollbar globally */}

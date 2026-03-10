@@ -89,3 +89,36 @@ self.addEventListener("fetch", (event) => {
         return;
     }
 });
+
+// Handle notification actions (e.g. Snooze, Dismiss)
+self.addEventListener('notificationclick', function(event) {
+    const notification = event.notification;
+    const action = event.action;
+    const data = notification.data || {};
+
+    // Close the notification
+    notification.close();
+
+    // Send message to open clients
+    event.waitUntil(
+        clients.matchAll({ type: 'window' }).then(windowClients => {
+            for (let i = 0; i < windowClients.length; i++) {
+                const client = windowClients[i];
+                client.postMessage({
+                    type: 'NOTIFICATION_CLICK',
+                    action: action,
+                    reminderId: data.reminderId
+                });
+            }
+
+            // If the user clicked the notification itself (not an action button)
+            // and there's a window client, focus it.
+            if (!action && windowClients.length > 0) {
+                windowClients[0].focus();
+            } else if (!action) {
+                // If there's no open client, open a new one
+                clients.openWindow('/');
+            }
+        })
+    );
+});

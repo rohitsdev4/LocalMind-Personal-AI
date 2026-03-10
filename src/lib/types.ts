@@ -109,12 +109,22 @@ export interface UserSettings {
 // Reminders
 // ============================================================
 
+export type ReminderRepeat = "none" | "daily" | "weekly" | "monthly" | "yearly";
+export type ReminderPriority = "low" | "medium" | "high" | "urgent";
+export type ReminderStatus = "active" | "fired" | "snoozed" | "dismissed";
+
 export interface Reminder {
     id: ID;
     message: string;
     triggerTime: Timestamp;
     fired: boolean;
     createdAt: Timestamp;
+    repeat?: ReminderRepeat;
+    priority?: ReminderPriority;
+    category?: string;
+    snoozedUntil?: Timestamp;
+    taskId?: ID;
+    status?: ReminderStatus;
 }
 
 // ============================================================
