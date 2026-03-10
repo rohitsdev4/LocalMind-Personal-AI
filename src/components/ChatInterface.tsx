@@ -359,7 +359,7 @@ function DynamicHabitsView({ onBack }: { onBack: () => void }) {
     try {
         // HabitsView is a large existing component -- import it directly
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const HabitsView = require("./HabitsView").default;
+        const { HabitsView } = require("./HabitsView");
         return <HabitsView onBack={onBack} />;
     } catch {
         return (
