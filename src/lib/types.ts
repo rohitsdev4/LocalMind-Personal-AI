@@ -103,6 +103,8 @@ export interface UserSettings {
     maxContextMessages: number;
     installedAt?: Timestamp;
     openRouterApiKey?: string;
+    anthropicApiKey?: string;
+    openaiApiKey?: string;
 }
 
 // ============================================================

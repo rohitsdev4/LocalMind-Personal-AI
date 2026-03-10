@@ -71,6 +71,8 @@ const DEFAULT_SETTINGS: UserSettings = {
     notificationsEnabled: true,
     maxContextMessages: 8,
     openRouterApiKey: "",
+    anthropicApiKey: "",
+    openaiApiKey: "",
 };
 
 // ============================================================

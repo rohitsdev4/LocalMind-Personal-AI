@@ -52,6 +52,9 @@ export function SettingsModal({
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [deleting, setDeleting] = useState(false);
     const [apiKey, setApiKey] = useState("");
+    const [anthropicApiKey, setAnthropicApiKey] = useState("");
+    const [openaiApiKey, setOpenaiApiKey] = useState("");
+
     const [isConnecting, setIsConnecting] = useState(false);
     const [connectionStatus, setConnectionStatus] = useState<"idle" | "success" | "error">("idle");
     const [connectionMessage, setConnectionMessage] = useState("");
@@ -68,6 +71,12 @@ export function SettingsModal({
         if (s.openRouterApiKey) {
             setApiKey(s.openRouterApiKey);
         }
+        if (s.anthropicApiKey) {
+            setAnthropicApiKey(s.anthropicApiKey);
+        }
+        if (s.openaiApiKey) {
+            setOpenaiApiKey(s.openaiApiKey);
+        }
         const info = await db.getStorageUsage();
         setStorageInfo(info);
     };
@@ -81,6 +90,32 @@ export function SettingsModal({
             const newSettings: UserSettings = {
                 ...settings,
                 openRouterApiKey: newKey,
+            };
+            await db.saveSettings(newSettings);
+            setSettings(newSettings);
+        }
+    };
+
+    const handleAnthropicApiKeyChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newKey = e.target.value;
+        setAnthropicApiKey(newKey);
+        if (settings) {
+            const newSettings: UserSettings = {
+                ...settings,
+                anthropicApiKey: newKey,
+            };
+            await db.saveSettings(newSettings);
+            setSettings(newSettings);
+        }
+    };
+
+    const handleOpenaiApiKeyChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newKey = e.target.value;
+        setOpenaiApiKey(newKey);
+        if (settings) {
+            const newSettings: UserSettings = {
+                ...settings,
+                openaiApiKey: newKey,
             };
             await db.saveSettings(newSettings);
             setSettings(newSettings);
@@ -177,6 +212,20 @@ export function SettingsModal({
             size: "Free",
             recommended: false,
         },
+        {
+            id: "claude-3-5-sonnet-20241022",
+            name: "Claude 3.5 Sonnet",
+            desc: "Anthropic's most intelligent model",
+            size: "BYOK",
+            recommended: false,
+        },
+        {
+            id: "gpt-4o",
+            name: "GPT-4o",
+            desc: "OpenAI's most capable model",
+            size: "BYOK",
+            recommended: false,
+        },
     ];
 
     const STORAGE_ITEMS = [
@@ -248,6 +297,34 @@ export function SettingsModal({
                                 <p className="text-xs text-white/30 mt-1">
                                     Get your free key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:underline">openrouter.ai</a>
                                 </p>
+                            </div>
+                            <div className="flex flex-col gap-1.5 mt-2">
+                                <label className="text-sm font-medium text-white/70">
+                                    Anthropic API Key (Fallback)
+                                </label>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="password"
+                                        value={anthropicApiKey}
+                                        onChange={handleAnthropicApiKeyChange}
+                                        placeholder="sk-ant-..."
+                                        className="flex-1 px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none focus:border-brand-500 transition-colors"
+                                    />
+                                </div>
+                            </div>
+                            <div className="flex flex-col gap-1.5 mt-2">
+                                <label className="text-sm font-medium text-white/70">
+                                    OpenAI API Key (Fallback 2)
+                                </label>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="password"
+                                        value={openaiApiKey}
+                                        onChange={handleOpenaiApiKeyChange}
+                                        placeholder="sk-proj-..."
+                                        className="flex-1 px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none focus:border-brand-500 transition-colors"
+                                    />
+                                </div>
                             </div>
                         </div>
                     </section>
