@@ -1,223 +1,191 @@
-// ============================================================
-// LocalMind — Memory Management System
-// Handles long-term memory via IndexedDB summaries and
-// sliding window context management
-// ============================================================
+// ================================================================
+// LocalMind -- Memory Management
+// Context window management and conversation summarization
+// ================================================================
 
-import db from "./db";
-import type { ChatMessage, MemorySearchResult } from "./types";
+import { ChatMessage, MemorySearchResult } from "./types";
+import * as db from "./db";
 
-// ============================================================
+// ================================================================
 // Context Window Management
-// Keeps the last N messages + injects relevant memory
-// ============================================================
+// ================================================================
 
 /**
- * Implements sliding window context management.
- * When messages exceed the limit, older messages are summarized
- * and stored for future retrieval.
+ * Get a windowed slice of messages for API context.
+ * If messages exceed the limit, older ones are summarized and stored.
  */
 export async function getContextWindow(
-    allMessages: ChatMessage[],
-    maxMessages: number = 12
+    messages: ChatMessage[],
+    maxMessages: number = 50
 ): Promise<ChatMessage[]> {
-    // System messages always stay in context
-    const systemMessages = allMessages.filter((m) => m.role === "system");
-    const nonSystemMessages = allMessages.filter((m) => m.role !== "system");
-
-    if (nonSystemMessages.length <= maxMessages) {
-        return allMessages;
+    if (messages.length <= maxMessages) {
+        return messages;
     }
 
-    // Take the most recent messages for the active context
-    const recentMessages = nonSystemMessages.slice(-maxMessages);
+    // Summarize older messages
+    const cutoff = messages.length - maxMessages;
+    const olderMessages = messages.slice(0, cutoff);
+    const recentMessages = messages.slice(cutoff);
 
-    // Messages that fell out of the window get summarized
-    const oldMessages = nonSystemMessages.slice(0, -maxMessages);
-
-    // Only summarize if there are enough old messages worth summarizing
-    if (oldMessages.length >= 4) {
-        const summary = createSummaryFromMessages(oldMessages);
-        const summaryId = `summary_${Date.now()}`;
-        await db.saveMemorySummary(summaryId, summary);
+    // Create summary of older messages
+    const summary = summarizeMessages(olderMessages);
+    if (summary) {
+        await db.saveMemorySummary(summary);
     }
 
-    return [...systemMessages, ...recentMessages];
+    return recentMessages;
 }
 
 /**
- * Creates a condensed text summary from a batch of messages.
- * This is a simple extractive approach — we keep the key info.
+ * Summarize a batch of messages into a condensed memory string.
+ * Extracts key information from user-assistant pairs.
  */
-function createSummaryFromMessages(messages: ChatMessage[]): string {
-    const lines: string[] = [];
-    const date = messages[0]?.timestamp
-        ? new Date(messages[0].timestamp).toLocaleDateString()
-        : "Unknown date";
+function summarizeMessages(messages: ChatMessage[]): string {
+    if (messages.length === 0) return "";
 
-    lines.push(`[Conversation Summary — ${date}]`);
+    const pairs: string[] = [];
+    let i = 0;
 
-    for (const msg of messages) {
+    while (i < messages.length) {
+        const msg = messages[i];
+
         if (msg.role === "user") {
-            // Keep user messages concise
-            const truncated =
-                msg.content.length > 120
-                    ? msg.content.slice(0, 120) + "..."
-                    : msg.content;
-            lines.push(`User: ${truncated}`);
-        } else if (msg.role === "assistant" && !msg.toolName) {
-            const truncated =
-                msg.content.length > 150
-                    ? msg.content.slice(0, 150) + "..."
-                    : msg.content;
-            lines.push(`AI: ${truncated}`);
-        } else if (msg.role === "tool" && msg.toolName) {
-            lines.push(`Tool [${msg.toolName}]: executed`);
-        }
-    }
+            const userContent = msg.content.substring(0, 200).trim();
+            // Look for the next assistant response
+            let assistantContent = "";
+            let toolActions: string[] = [];
 
-    return lines.join("\n");
-}
-
-// ============================================================
-// Memory Search (search_memory tool implementation)
-// Searches across all data stores for relevant context
-// ============================================================
-
-/**
- * Searches IndexedDB across chats, tasks, habits, and journal
- * for content matching the query. Uses simple keyword matching
- * with relevance scoring.
- */
-export async function searchMemory(
-    query: string
-): Promise<MemorySearchResult[]> {
-    const results: MemorySearchResult[] = [];
-    const queryLower = query.toLowerCase();
-    const queryWords = queryLower.split(/\s+/).filter((w) => w.length > 2);
-
-    // Search chat summaries
-    const summaries = await db.getAllMemorySummaries();
-    for (const s of summaries) {
-        const score = calculateRelevance(s.summary, queryWords);
-        if (score > 0) {
-            results.push({
-                content: s.summary,
-                timestamp: s.timestamp,
-                relevanceScore: score,
-                source: "chat",
-            });
-        }
-    }
-
-    // Search tasks
-    const tasks = await db.getAllTasks();
-    for (const task of tasks) {
-        const text = `${task.name} ${task.description || ""} ${task.tags?.join(" ") || ""}`;
-        const score = calculateRelevance(text, queryWords);
-        if (score > 0) {
-            results.push({
-                content: `Task: "${task.name}" — Status: ${task.status}, Priority: ${task.priority}${task.dueDate ? `, Due: ${task.dueDate}` : ""}`,
-                timestamp: task.createdAt,
-                relevanceScore: score,
-                source: "task",
-            });
-        }
-    }
-
-    // Search habits
-    const habits = await db.getAllHabits();
-    for (const habit of habits) {
-        const text = `${habit.name} ${habit.description || ""}`;
-        const score = calculateRelevance(text, queryWords);
-        if (score > 0) {
-            results.push({
-                content: `Habit: "${habit.name}" — Streak: ${habit.streak} days, Frequency: ${habit.frequency}`,
-                timestamp: habit.createdAt,
-                relevanceScore: score,
-                source: "habit",
-            });
-        }
-    }
-
-    // Search journal entries
-    const journals = await db.getAllJournalEntries();
-    for (const entry of journals) {
-        const text = `${entry.entry} ${entry.mood} ${entry.tags?.join(" ") || ""}`;
-        const score = calculateRelevance(text, queryWords);
-        if (score > 0) {
-            results.push({
-                content: `Journal (${entry.mood}): ${entry.entry.slice(0, 200)}`,
-                timestamp: entry.createdAt,
-                relevanceScore: score,
-                source: "journal",
-            });
-        }
-    }
-
-    // Also search recent chat messages
-    const chatSessions = await db.getAllChatSessions();
-    for (const session of chatSessions.slice(0, 5)) {
-        // Search last 5 sessions
-        for (const msg of session.messages) {
-            if (msg.role === "user" || msg.role === "assistant") {
-                const score = calculateRelevance(msg.content, queryWords);
-                if (score > 0.3) {
-                    results.push({
-                        content: `[${msg.role}]: ${msg.content.slice(0, 200)}`,
-                        timestamp: msg.timestamp,
-                        relevanceScore: score,
-                        source: "chat",
-                    });
+            for (let j = i + 1; j < messages.length; j++) {
+                const next = messages[j];
+                if (next.role === "assistant") {
+                    assistantContent = next.content.substring(0, 200).trim();
+                    i = j + 1;
+                    break;
+                } else if (next.role === "tool" && next.toolName) {
+                    const result = next.toolResult as { success?: boolean; message?: string } | undefined;
+                    const preview = result?.message?.substring(0, 80) || next.content.substring(0, 80);
+                    toolActions.push(`Used ${next.toolName}: ${preview}`);
+                } else if (next.role === "user") {
+                    // Next user message without assistant response
+                    i = j;
+                    break;
+                }
+                if (j === messages.length - 1) {
+                    i = messages.length;
                 }
             }
+
+            let pairSummary = `User: ${userContent}`;
+            if (toolActions.length > 0) {
+                pairSummary += ` | Actions: ${toolActions.join("; ")}`;
+            }
+            if (assistantContent) {
+                pairSummary += ` | AI: ${assistantContent}`;
+            }
+            pairs.push(pairSummary);
+        } else {
+            i++;
         }
     }
 
-    // Sort by relevance and return top results
-    return results.sort((a, b) => b.relevanceScore - a.relevanceScore).slice(0, 10);
+    if (pairs.length === 0) return "";
+
+    const timestamp = new Date().toISOString();
+    return `[Summary ${timestamp}] ${pairs.join(" || ")}`;
 }
 
+// ================================================================
+// Add messages to long-term memory
+// ================================================================
+
 /**
- * Simple keyword-based relevance scoring.
- * Returns a score between 0 and 1.
+ * Check if conversation is getting long and auto-summarize older parts.
+ * Called after each AI response.
  */
-function calculateRelevance(text: string, queryWords: string[]): number {
-    if (!text || queryWords.length === 0) return 0;
+export async function addToMemory(messages: ChatMessage[]): Promise<void> {
+    // Only summarize if we have enough messages
+    if (messages.length < 10) return;
 
-    const textLower = text.toLowerCase();
-    let matchCount = 0;
-    let totalWeight = 0;
+    // Check if we should create a summary checkpoint
+    const session = await db.getChatSession();
+    const existingSummaries = session.summaries || [];
+    const lastSummaryCount = existingSummaries.length;
 
-    for (const word of queryWords) {
-        const occurrences = (textLower.match(new RegExp(word, "g")) || []).length;
-        if (occurrences > 0) {
-            // Weight by word length (longer words = more specific)
-            const weight = Math.min(word.length / 8, 1);
-            matchCount += weight * Math.min(occurrences, 3);
+    // Create a new summary every 20 messages
+    const summaryInterval = 20;
+    const expectedSummaries = Math.floor(messages.length / summaryInterval);
+
+    if (expectedSummaries > lastSummaryCount) {
+        const startIdx = lastSummaryCount * summaryInterval;
+        const endIdx = expectedSummaries * summaryInterval;
+        const toSummarize = messages.slice(startIdx, endIdx);
+
+        const summary = summarizeMessages(toSummarize);
+        if (summary) {
+            await db.saveMemorySummary(summary);
+            session.summaries = [...existingSummaries, summary];
+            await db.saveChatSession(session);
         }
-        totalWeight += Math.min(word.length / 8, 1);
     }
-
-    if (totalWeight === 0) return 0;
-    return Math.min(matchCount / totalWeight, 1);
 }
 
-/**
- * Loads the most recent memory summaries for system prompt injection.
- * This gives the AI "awareness" of past conversations at startup.
- */
-export async function getRecentMemoryContext(
-    count: number = 5
-): Promise<string> {
-    const summaries = await db.getAllMemorySummaries();
-    const recent = summaries.slice(0, count);
+// ================================================================
+// Memory Search
+// ================================================================
 
-    if (recent.length === 0) {
-        return "";
+/**
+ * Search through stored memory summaries by keyword matching.
+ */
+export async function searchMemory(query: string): Promise<MemorySearchResult[]> {
+    const summaries = await db.getMemorySummaries();
+    if (summaries.length === 0) return [];
+
+    const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    if (queryWords.length === 0) return [];
+
+    const results: MemorySearchResult[] = [];
+
+    for (const summary of summaries) {
+        const lowerSummary = summary.toLowerCase();
+        let matchCount = 0;
+
+        for (const word of queryWords) {
+            if (lowerSummary.includes(word)) {
+                matchCount++;
+            }
+        }
+
+        if (matchCount > 0) {
+            const relevance = matchCount / queryWords.length;
+            // Extract timestamp from summary if present
+            const timestampMatch = summary.match(/\[Summary ([^\]]+)\]/);
+            const timestamp = timestampMatch ? timestampMatch[1] : "unknown";
+
+            results.push({
+                content: summary,
+                timestamp,
+                relevance,
+            });
+        }
     }
 
-    const memoryBlock = recent.map((s) => s.summary).join("\n---\n");
+    // Sort by relevance (highest first)
+    results.sort((a, b) => b.relevance - a.relevance);
 
-    return `\n\n[LONG-TERM MEMORY — Recent Conversation Summaries]\n${memoryBlock}\n[END MEMORY]`;
+    return results;
+}
+
+// ================================================================
+// Recent Memory Context (for system prompt)
+// ================================================================
+
+/**
+ * Get recent memory summaries to include in the system prompt.
+ */
+export async function getRecentMemoryContext(count: number = 3): Promise<string> {
+    const summaries = await db.getMemorySummaries();
+    if (summaries.length === 0) return "";
+
+    const recent = summaries.slice(-count);
+    return `\n\nRECENT MEMORY (previous conversations):\n${recent.join("\n")}`;
 }
