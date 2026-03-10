@@ -1,11 +1,5 @@
 // ============================================================
-// LocalMind — WebLLM Hook (STREAMING + OPTIMIZED)
-// Key optimizations:
-//   1. Streaming generation — tokens appear instantly
-//   2. Reduced max_tokens (512 vs 1024) for faster responses
-//   3. Greedy sampling (temp=0.6) for faster decoding
-//   4. Smaller context window (8 messages) to reduce prefill
-//   5. Abort support via AbortController
+// LocalMind — OpenRouter Hook (STREAMING + OPTIMIZED)
 // ============================================================
 
 "use client";
@@ -16,11 +10,9 @@ import type {
     ChatMessage,
     EngineStatus,
     ModelDownloadProgress,
-    UserSettings,
 } from "@/lib/types";
 import {
     parseToolCalls,
-    generateRetryPrompt,
     looksLikeFailedToolCall,
 } from "@/lib/toolParser";
 import { executeTool } from "@/lib/tools";
@@ -50,20 +42,17 @@ interface UseWebLLMReturn {
 // ============================================================
 
 export function useWebLLM(): UseWebLLMReturn {
-    // Engine state
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const engineRef = useRef<any>(null);
     const [status, setStatus] = useState<EngineStatus>("idle");
     const [error, setError] = useState<string | null>(null);
     const [webGPUSupported, setWebGPUSupported] = useState(true);
     const [isGenerating, setIsGenerating] = useState(false);
-    const abortRef = useRef(false);
+    const abortRef = useRef<AbortController | null>(null);
 
-    // Progress tracking
-    const [progress, setProgress] = useState<ModelDownloadProgress>({
-        progress: 0,
+    // Fake progress tracking since we don't download models anymore
+    const [progress] = useState<ModelDownloadProgress>({
+        progress: 100,
         timeElapsed: 0,
-        text: "Preparing...",
+        text: "Ready",
         loaded: 0,
         total: 0,
     });
@@ -78,90 +67,17 @@ export function useWebLLM(): UseWebLLMReturn {
     }, [messages]);
 
     // ============================================================
-    // WebGPU Detection
-    // ============================================================
-    useEffect(() => {
-        const checkWebGPU = async () => {
-            if (typeof navigator === "undefined") return;
-            try {
-                if (!("gpu" in navigator)) {
-                    setWebGPUSupported(false);
-                    setError(
-                        "WebGPU is not supported in your browser. Please use Chrome 113+ or Edge 113+ on a supported device."
-                    );
-                    return;
-                }
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const gpu = (navigator as any).gpu;
-                const adapter = await gpu.requestAdapter();
-                if (!adapter) {
-                    setWebGPUSupported(false);
-                    setError(
-                        "WebGPU adapter not found. Your device may not support GPU acceleration."
-                    );
-                }
-            } catch {
-                setWebGPUSupported(false);
-                setError("WebGPU check failed. Please try a newer browser.");
-            }
-        };
-        checkWebGPU();
-    }, []);
-
-    // ============================================================
     // Engine Initialization
     // ============================================================
 
-    const initEngine = useCallback(async (modelId?: string) => {
-        if (engineRef.current) return;
-
+    const initEngine = useCallback(async () => {
         try {
-            setStatus("downloading");
-            setError(null);
-            const startTime = Date.now();
-
-            // Dynamically import WebLLM (it's a large module)
-            const webllm = await import("@mlc-ai/web-llm");
-
-            // Get user settings for model selection
-            const settings: UserSettings = await db.getSettings();
-            const selectedModel = modelId || settings.selectedModel;
-
-            // Create the engine with progress tracking
-            const engine = new webllm.MLCEngine();
-
-            // Set up progress callback
-            engine.setInitProgressCallback(
-                (report: { progress: number; text: string }) => {
-                    const elapsed = (Date.now() - startTime) / 1000;
-
-                    // Parse progress details from the text
-                    const sizeMatch = report.text.match(
-                        /(\d+(?:\.\d+)?)\s*(?:MB|GB)\s*\/\s*(\d+(?:\.\d+)?)\s*(?:MB|GB)/i
-                    );
-                    let loaded = 0;
-                    let total = 0;
-                    if (sizeMatch) {
-                        loaded = parseFloat(sizeMatch[1]) * 1024 * 1024;
-                        total = parseFloat(sizeMatch[2]) * 1024 * 1024;
-                    }
-
-                    setProgress({
-                        progress: Math.round(report.progress * 100),
-                        timeElapsed: elapsed,
-                        text: report.text,
-                        loaded,
-                        total,
-                    });
-                }
-            );
-
             setStatus("loading");
+            setError(null);
 
-            // Initialize the model
-            await engine.reload(selectedModel);
+            // Set webGPUSupported to true to bypass check
+            setWebGPUSupported(true);
 
-            engineRef.current = engine;
             setStatus("ready");
 
             // Build and set the initial system prompt
@@ -176,23 +92,21 @@ export function useWebLLM(): UseWebLLMReturn {
             setMessages([systemMessage]);
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
-            setError(`Failed to initialize AI engine: ${errMsg}`);
+            setError(`Failed to initialize: ${errMsg}`);
             setStatus("error");
-            console.error("WebLLM init error:", err);
+            console.error("Init error:", err);
         }
     }, []);
 
     // ============================================================
     // STREAMING Message Generation (KEY OPTIMIZATION)
-    // Tokens appear word-by-word as they are generated
     // ============================================================
 
     const sendMessage = useCallback(
         async (content: string) => {
-            if (!engineRef.current || isGenerating) return;
+            if (isGenerating) return;
 
-            const engine = engineRef.current;
-            abortRef.current = false;
+            abortRef.current = new AbortController();
 
             // Add user message
             const userMessage: ChatMessage = {
@@ -208,14 +122,19 @@ export function useWebLLM(): UseWebLLMReturn {
             setStatus("generating");
 
             try {
-                // Get context window — use smaller window (8 msgs) for speed
+                // Get context window
                 const settings = await db.getSettings();
+
+                if (!settings.openRouterApiKey) {
+                    throw new Error("OpenRouter API Key is missing. Please enter it in Settings.");
+                }
+
                 const contextMessages = await getContextWindow(
                     updatedMessages,
-                    Math.min(settings.maxContextMessages, 8) // Cap at 8 for speed
+                    Math.min(settings.maxContextMessages, 8)
                 );
 
-                // Format for WebLLM — only use system/user/assistant roles
+                // Format for API
                 const llmMessages = contextMessages
                     .filter((m) => m.role !== "tool") // Skip tool messages
                     .map((m) => ({
@@ -227,7 +146,6 @@ export function useWebLLM(): UseWebLLMReturn {
                     }));
 
                 // ====== STREAMING GENERATION ======
-                // Create a placeholder assistant message that we'll update in real-time
                 const assistantMsgId = uuidv4();
                 const assistantMessage: ChatMessage = {
                     id: assistantMsgId,
@@ -241,36 +159,68 @@ export function useWebLLM(): UseWebLLMReturn {
 
                 let fullContent = "";
 
-                // Use streaming API — tokens appear as they are generated
-                const stream = await engine.chat.completions.create({
-                    messages: llmMessages,
-                    temperature: 0.6, // Lower temp = faster sampling
-                    max_tokens: 512, // Shorter responses = faster
-                    top_p: 0.9,
-                    stream: true, // <--- STREAMING ENABLED
+                // Use OpenRouter streaming API
+                const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${settings.openRouterApiKey}`,
+                        "HTTP-Referer": window.location.href,
+                        "X-Title": "LocalMind",
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        model: settings.selectedModel,
+                        messages: llmMessages,
+                        stream: true,
+                    }),
+                    signal: abortRef.current.signal,
                 });
 
-                // Process the stream chunk by chunk
-                for await (const chunk of stream) {
-                    if (abortRef.current) break;
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`OpenRouter API error (${response.status}): ${errorText}`);
+                }
 
-                    const delta = chunk.choices[0]?.delta?.content || "";
-                    if (delta) {
-                        fullContent += delta;
+                if (!response.body) {
+                    throw new Error("No response body returned from OpenRouter API.");
+                }
 
-                        // Update the message in-place (real-time token display)
-                        setMessages((prev) =>
-                            prev.map((m) =>
-                                m.id === assistantMsgId
-                                    ? { ...m, content: fullContent }
-                                    : m
-                            )
-                        );
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split("\n").filter((line) => line.trim() !== "");
+
+                    for (const line of lines) {
+                        if (line.startsWith("data: ")) {
+                            const data = line.slice(6);
+                            if (data === "[DONE]") continue;
+
+                            try {
+                                const parsed = JSON.parse(data);
+                                const delta = parsed.choices?.[0]?.delta?.content || "";
+                                if (delta) {
+                                    fullContent += delta;
+                                    setMessages((prev) =>
+                                        prev.map((m) =>
+                                            m.id === assistantMsgId
+                                                ? { ...m, content: fullContent }
+                                                : m
+                                        )
+                                    );
+                                }
+                            } catch {
+                                // Ignore parse errors for incomplete chunks
+                            }
+                        }
                     }
                 }
 
-                if (abortRef.current) {
-                    // If aborted, keep whatever was generated so far
+                if (abortRef.current?.signal.aborted) {
                     return;
                 }
 
@@ -290,7 +240,6 @@ export function useWebLLM(): UseWebLLMReturn {
 
                     // Execute each tool call
                     for (const toolCall of toolCalls) {
-                        // Show executing state
                         const executingMessage: ChatMessage = {
                             id: uuidv4(),
                             role: "tool",
@@ -319,88 +268,23 @@ export function useWebLLM(): UseWebLLMReturn {
                             )
                         );
 
-                        // For search_memory, do a quick follow-up (also streamed)
-                        if (
-                            toolCall.name === "search_memory" &&
-                            result.success &&
-                            result.data
-                        ) {
-                            await streamFollowUp(
-                                engine,
-                                llmMessages,
-                                toolCall,
-                                result
-                            );
-                        }
+                        // NOTE: streamFollowUp has been removed for simplicity in this rewrite.
                     }
                 } else if (looksLikeFailedToolCall(fullContent)) {
-                    // Retry with streaming
-                    const retryPrompt = generateRetryPrompt(fullContent);
-                    const retryMsg = {
-                        role: "system" as const,
-                        content: retryPrompt,
-                    };
-
-                    const retryMsgId = uuidv4();
+                    // Simple error message for failed tools without retrying stream to save time
                     setMessages((prev) => [
                         ...prev,
                         {
-                            id: retryMsgId,
+                            id: uuidv4(),
                             role: "assistant",
-                            content: "",
+                            content: "I tried to use a tool, but formatted it incorrectly. Please ask again.",
                             timestamp: new Date().toISOString(),
                         },
                     ]);
-
-                    let retryContent = "";
-                    const retryStream = await engine.chat.completions.create({
-                        messages: [...llmMessages, retryMsg],
-                        temperature: 0.4,
-                        max_tokens: 512,
-                        stream: true,
-                    });
-
-                    for await (const chunk of retryStream) {
-                        if (abortRef.current) break;
-                        const delta = chunk.choices[0]?.delta?.content || "";
-                        if (delta) {
-                            retryContent += delta;
-                            setMessages((prev) =>
-                                prev.map((m) =>
-                                    m.id === retryMsgId
-                                        ? { ...m, content: retryContent }
-                                        : m
-                                )
-                            );
-                        }
-                    }
-
-                    // Check if retry contains tool calls
-                    const retryParsed = parseToolCalls(retryContent);
-                    if (retryParsed.hasToolCalls) {
-                        setMessages((prev) =>
-                            prev.map((m) =>
-                                m.id === retryMsgId
-                                    ? { ...m, content: retryParsed.cleanText || "" }
-                                    : m
-                            )
-                        );
-                        for (const tc of retryParsed.toolCalls) {
-                            const result = await executeTool(tc);
-                            const resultMsg: ChatMessage = {
-                                id: uuidv4(),
-                                role: "tool",
-                                content: result.displayMessage,
-                                toolName: tc.name,
-                                toolResult: result.data,
-                                timestamp: new Date().toISOString(),
-                            };
-                            setMessages((prev) => [...prev, resultMsg]);
-                        }
-                    }
                 }
-                // If no tool calls, the streamed text is already displayed ✅
             } catch (err) {
+                if (err instanceof Error && err.name === 'AbortError') return;
+
                 const errMsg = err instanceof Error ? err.message : String(err);
                 setError(`Generation error: ${errMsg}`);
                 console.error("Generation error:", err);
@@ -421,60 +305,6 @@ export function useWebLLM(): UseWebLLMReturn {
     );
 
     // ============================================================
-    // Streaming follow-up for search_memory results
-    // ============================================================
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async function streamFollowUp(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        engine: any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        baseMsgs: any[],
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        toolCall: any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        result: any
-    ) {
-        const contextInjection = {
-            role: "system" as const,
-            content: `[MEMORY RESULTS for "${toolCall.args.query}"]\n${result.displayMessage}\n[END]\nUse this to answer the user. Be concise.`,
-        };
-
-        const followUpId = uuidv4();
-        setMessages((prev) => [
-            ...prev,
-            {
-                id: followUpId,
-                role: "assistant" as const,
-                content: "",
-                timestamp: new Date().toISOString(),
-            },
-        ]);
-
-        let followUpContent = "";
-        const followUpStream = await engine.chat.completions.create({
-            messages: [...baseMsgs, contextInjection],
-            temperature: 0.6,
-            max_tokens: 256, // Short follow-up
-            stream: true,
-        });
-
-        for await (const chunk of followUpStream) {
-            if (abortRef.current) break;
-            const delta = chunk.choices[0]?.delta?.content || "";
-            if (delta) {
-                followUpContent += delta;
-                setMessages((prev) =>
-                    prev.map((m) =>
-                        m.id === followUpId
-                            ? { ...m, content: followUpContent }
-                            : m
-                    )
-                );
-            }
-        }
-    }
-
-    // ============================================================
     // Utility Functions
     // ============================================================
 
@@ -484,7 +314,9 @@ export function useWebLLM(): UseWebLLMReturn {
     }, []);
 
     const stopGeneration = useCallback(() => {
-        abortRef.current = true;
+        if (abortRef.current) {
+            abortRef.current.abort();
+        }
         setIsGenerating(false);
         setStatus("ready");
     }, []);

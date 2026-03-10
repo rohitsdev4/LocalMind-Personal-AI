@@ -66,10 +66,11 @@ const memoryStore = localforage.createInstance({
 // ============================================================
 
 const DEFAULT_SETTINGS: UserSettings = {
-    selectedModel: "SmolLM2-360M-Instruct-q4f16_1-MLC",
+    selectedModel: "google/gemini-2.5-flash:free",
     theme: "dark",
     notificationsEnabled: true,
     maxContextMessages: 8,
+    openRouterApiKey: "",
 };
 
 // ============================================================
