@@ -63,7 +63,7 @@ export function SettingsModal({ isOpen, onClose, currentModel, onModelChange }: 
     const handleSaveKey = useCallback(async () => {
         if (!apiKey.trim()) return;
         const settings = await db.getSettings();
-        await db.saveSettings({ ...settings, openRouterApiKey: apiKey.trim() });
+        await db.updateSettings({ ...settings, openRouterApiKey: apiKey.trim() });
         setSavedKey(apiKey.trim());
         setApiKey("");
     }, [apiKey]);
@@ -88,7 +88,7 @@ export function SettingsModal({ isOpen, onClose, currentModel, onModelChange }: 
         async (modelId: string) => {
             onModelChange(modelId);
             const settings = await db.getSettings();
-            await db.saveSettings({ ...settings, selectedModel: modelId });
+            await db.updateSettings({ ...settings, selectedModel: modelId });
         },
         [onModelChange]
     );
