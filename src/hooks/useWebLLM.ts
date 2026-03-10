@@ -58,6 +58,89 @@ export function useWebLLM(): UseWebLLMReturn {
     const [webGPUSupported, setWebGPUSupported] = useState(true);
     const [isGenerating, setIsGenerating] = useState(false);
     const abortRef = useRef(false);
+    const fetchAbortControllerRef = useRef<AbortController | null>(null);
+
+    // ============================================================
+    // Helper: Stream OpenRouter
+    // ============================================================
+    const streamOpenRouter = async (
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        messagesToComplete: any[],
+        apiKey: string,
+        modelId: string,
+        temperature: number,
+        maxTokens: number,
+        onChunk: (content: string) => void
+    ) => {
+        const controller = new AbortController();
+        fetchAbortControllerRef.current = controller;
+
+        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+                "HTTP-Referer": window.location.origin,
+                "X-Title": "LocalMind",
+            },
+            body: JSON.stringify({
+                model: modelId,
+                messages: messagesToComplete,
+                temperature,
+                max_tokens: maxTokens,
+                top_p: 0.9,
+                stream: true,
+            }),
+            signal: controller.signal,
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(`OpenRouter API error: ${errorData.error?.message || response.statusText}`);
+        }
+
+        if (!response.body) {
+            throw new Error("ReadableStream not yet supported in this browser.");
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let fullContent = "";
+
+        try {
+            while (true) {
+                if (abortRef.current) break;
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || "";
+
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const data = line.slice(6);
+                        if (data === '[DONE]') continue;
+                        try {
+                            const parsed = JSON.parse(data);
+                            const delta = parsed.choices[0]?.delta?.content || "";
+                            if (delta) {
+                                fullContent += delta;
+                                onChunk(fullContent);
+                            }
+                        } catch (e) {
+                            console.warn("Error parsing OpenRouter stream chunk", e);
+                        }
+                    }
+                }
+            }
+        } finally {
+            fetchAbortControllerRef.current = null;
+        }
+
+        return fullContent;
+    };
 
     // Progress tracking
     const [progress, setProgress] = useState<ModelDownloadProgress>({
@@ -126,6 +209,23 @@ export function useWebLLM(): UseWebLLMReturn {
             // Get user settings for model selection
             const settings: UserSettings = await db.getSettings();
             const selectedModel = modelId || settings.selectedModel;
+
+            if (selectedModel === "openrouter") {
+                engineRef.current = "openrouter";
+                setStatus("ready");
+
+                // Build and set the initial system prompt
+                const systemPrompt = await buildSystemPrompt();
+                const systemMessage: ChatMessage = {
+                    id: uuidv4(),
+                    role: "system",
+                    content: systemPrompt,
+                    timestamp: new Date().toISOString(),
+                };
+
+                setMessages([systemMessage]);
+                return;
+            }
 
             // Create the engine with progress tracking
             const engine = new webllm.MLCEngine();
@@ -241,37 +341,64 @@ export function useWebLLM(): UseWebLLMReturn {
 
                 let fullContent = "";
 
-                // Use streaming API — tokens appear as they are generated
-                const stream = await engine.chat.completions.create({
-                    messages: llmMessages,
-                    temperature: 0.6, // Lower temp = faster sampling
-                    max_tokens: 512, // Shorter responses = faster
-                    top_p: 0.9,
-                    stream: true, // <--- STREAMING ENABLED
-                });
-
-                // Process the stream chunk by chunk
-                for await (const chunk of stream) {
-                    if (abortRef.current) break;
-
-                    const delta = chunk.choices[0]?.delta?.content || "";
-                    if (delta) {
-                        fullContent += delta;
-
-                        // Update the message in-place (real-time token display)
-                        setMessages((prev) =>
-                            prev.map((m) =>
-                                m.id === assistantMsgId
-                                    ? { ...m, content: fullContent }
-                                    : m
-                            )
-                        );
+                if (settings.selectedModel === "openrouter") {
+                    const apiKey = settings.openRouterApiKey;
+                    if (!apiKey) {
+                        throw new Error("OpenRouter API key is missing. Please configure it in settings.");
                     }
-                }
+                    const openRouterModelId = settings.openRouterModel || "google/gemini-2.5-flash";
 
-                if (abortRef.current) {
-                    // If aborted, keep whatever was generated so far
-                    return;
+                    fullContent = await streamOpenRouter(
+                        llmMessages,
+                        apiKey,
+                        openRouterModelId,
+                        0.6,
+                        512,
+                        (content) => {
+                            setMessages((prev) =>
+                                prev.map((m) =>
+                                    m.id === assistantMsgId
+                                        ? { ...m, content }
+                                        : m
+                                )
+                            );
+                        }
+                    );
+
+                    if (abortRef.current) return;
+                } else {
+                    // Use streaming API — tokens appear as they are generated
+                    const stream = await engine.chat.completions.create({
+                        messages: llmMessages,
+                        temperature: 0.6, // Lower temp = faster sampling
+                        max_tokens: 512, // Shorter responses = faster
+                        top_p: 0.9,
+                        stream: true, // <--- STREAMING ENABLED
+                    });
+
+                    // Process the stream chunk by chunk
+                    for await (const chunk of stream) {
+                        if (abortRef.current) break;
+
+                        const delta = chunk.choices[0]?.delta?.content || "";
+                        if (delta) {
+                            fullContent += delta;
+
+                            // Update the message in-place (real-time token display)
+                            setMessages((prev) =>
+                                prev.map((m) =>
+                                    m.id === assistantMsgId
+                                        ? { ...m, content: fullContent }
+                                        : m
+                                )
+                            );
+                        }
+                    }
+
+                    if (abortRef.current) {
+                        // If aborted, keep whatever was generated so far
+                        return;
+                    }
                 }
 
                 // ====== POST-GENERATION: Check for tool calls ======
@@ -353,25 +480,48 @@ export function useWebLLM(): UseWebLLMReturn {
                     ]);
 
                     let retryContent = "";
-                    const retryStream = await engine.chat.completions.create({
-                        messages: [...llmMessages, retryMsg],
-                        temperature: 0.4,
-                        max_tokens: 512,
-                        stream: true,
-                    });
-
-                    for await (const chunk of retryStream) {
-                        if (abortRef.current) break;
-                        const delta = chunk.choices[0]?.delta?.content || "";
-                        if (delta) {
-                            retryContent += delta;
-                            setMessages((prev) =>
-                                prev.map((m) =>
-                                    m.id === retryMsgId
-                                        ? { ...m, content: retryContent }
-                                        : m
-                                )
+                    if (settings.selectedModel === "openrouter") {
+                        const apiKey = settings.openRouterApiKey;
+                        if (apiKey) {
+                            const openRouterModelId = settings.openRouterModel || "google/gemini-2.5-flash";
+                            retryContent = await streamOpenRouter(
+                                [...llmMessages, retryMsg],
+                                apiKey,
+                                openRouterModelId,
+                                0.4,
+                                512,
+                                (content) => {
+                                    setMessages((prev) =>
+                                        prev.map((m) =>
+                                            m.id === retryMsgId
+                                                ? { ...m, content }
+                                                : m
+                                        )
+                                    );
+                                }
                             );
+                        }
+                    } else {
+                        const retryStream = await engine.chat.completions.create({
+                            messages: [...llmMessages, retryMsg],
+                            temperature: 0.4,
+                            max_tokens: 512,
+                            stream: true,
+                        });
+
+                        for await (const chunk of retryStream) {
+                            if (abortRef.current) break;
+                            const delta = chunk.choices[0]?.delta?.content || "";
+                            if (delta) {
+                                retryContent += delta;
+                                setMessages((prev) =>
+                                    prev.map((m) =>
+                                        m.id === retryMsgId
+                                            ? { ...m, content: retryContent }
+                                            : m
+                                    )
+                                );
+                            }
                         }
                     }
 
@@ -417,6 +567,7 @@ export function useWebLLM(): UseWebLLMReturn {
                 setStatus("ready");
             }
         },
+        // eslint-disable-next-line react-hooks/exhaustive-deps
         [isGenerating]
     );
 
@@ -451,25 +602,51 @@ export function useWebLLM(): UseWebLLMReturn {
         ]);
 
         let followUpContent = "";
-        const followUpStream = await engine.chat.completions.create({
-            messages: [...baseMsgs, contextInjection],
-            temperature: 0.6,
-            max_tokens: 256, // Short follow-up
-            stream: true,
-        });
 
-        for await (const chunk of followUpStream) {
-            if (abortRef.current) break;
-            const delta = chunk.choices[0]?.delta?.content || "";
-            if (delta) {
-                followUpContent += delta;
-                setMessages((prev) =>
-                    prev.map((m) =>
-                        m.id === followUpId
-                            ? { ...m, content: followUpContent }
-                            : m
-                    )
+        const settings = await db.getSettings();
+
+        if (settings.selectedModel === "openrouter") {
+            const apiKey = settings.openRouterApiKey;
+            if (apiKey) {
+                const openRouterModelId = settings.openRouterModel || "google/gemini-2.5-flash";
+                followUpContent = await streamOpenRouter(
+                    [...baseMsgs, contextInjection],
+                    apiKey,
+                    openRouterModelId,
+                    0.6,
+                    256,
+                    (content) => {
+                        setMessages((prev) =>
+                            prev.map((m) =>
+                                m.id === followUpId
+                                    ? { ...m, content }
+                                    : m
+                            )
+                        );
+                    }
                 );
+            }
+        } else {
+            const followUpStream = await engine.chat.completions.create({
+                messages: [...baseMsgs, contextInjection],
+                temperature: 0.6,
+                max_tokens: 256, // Short follow-up
+                stream: true,
+            });
+
+            for await (const chunk of followUpStream) {
+                if (abortRef.current) break;
+                const delta = chunk.choices[0]?.delta?.content || "";
+                if (delta) {
+                    followUpContent += delta;
+                    setMessages((prev) =>
+                        prev.map((m) =>
+                            m.id === followUpId
+                                ? { ...m, content: followUpContent }
+                                : m
+                        )
+                    );
+                }
             }
         }
     }
@@ -485,6 +662,10 @@ export function useWebLLM(): UseWebLLMReturn {
 
     const stopGeneration = useCallback(() => {
         abortRef.current = true;
+        if (fetchAbortControllerRef.current) {
+            fetchAbortControllerRef.current.abort();
+            fetchAbortControllerRef.current = null;
+        }
         setIsGenerating(false);
         setStatus("ready");
     }, []);

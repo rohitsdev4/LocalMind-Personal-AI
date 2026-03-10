@@ -97,7 +97,9 @@ export interface JournalEntry {
 // ============================================================
 
 export interface UserSettings {
-    selectedModel: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC" | "SmolLM2-360M-Instruct-q4f16_1-MLC";
+    selectedModel: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC" | "SmolLM2-360M-Instruct-q4f16_1-MLC" | "openrouter";
+    openRouterApiKey?: string;
+    openRouterModel?: string;
     theme: "dark" | "light";
     notificationsEnabled: boolean;
     maxContextMessages: number;

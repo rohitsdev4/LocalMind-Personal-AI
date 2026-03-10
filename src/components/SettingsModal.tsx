@@ -111,6 +111,13 @@ export function SettingsModal({
             size: "~250MB",
             recommended: false,
         },
+        {
+            id: "openrouter",
+            name: "OpenRouter",
+            desc: "Use cloud models via OpenRouter API",
+            size: "Cloud",
+            recommended: false,
+        },
     ];
 
     const STORAGE_ITEMS = [
@@ -187,6 +194,49 @@ export function SettingsModal({
                                 </button>
                             ))}
                         </div>
+
+                        {/* OpenRouter Config (visible only if OpenRouter is selected) */}
+                        {(currentModel === "openrouter" || settings?.selectedModel === "openrouter") && (
+                            <div className="mt-4 p-4 rounded-xl border border-brand-500/20 bg-brand-500/5 space-y-4 animate-fade-in">
+                                <div>
+                                    <label className="block text-xs font-medium text-white/60 mb-1.5">
+                                        OpenRouter API Key
+                                    </label>
+                                    <input
+                                        type="password"
+                                        value={settings?.openRouterApiKey || ""}
+                                        onChange={async (e) => {
+                                            if (!settings) return;
+                                            const newSettings = { ...settings, openRouterApiKey: e.target.value };
+                                            setSettings(newSettings);
+                                            await db.saveSettings(newSettings);
+                                        }}
+                                        placeholder="sk-or-v1-..."
+                                        className="w-full bg-surface-200 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/20 outline-none focus:border-brand-500/50 transition-colors"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-white/60 mb-1.5">
+                                        Model ID (e.g. google/gemini-2.5-flash)
+                                    </label>
+                                    <input
+                                        type="text"
+                                        value={settings?.openRouterModel || ""}
+                                        onChange={async (e) => {
+                                            if (!settings) return;
+                                            const newSettings = { ...settings, openRouterModel: e.target.value };
+                                            setSettings(newSettings);
+                                            await db.saveSettings(newSettings);
+                                        }}
+                                        placeholder="google/gemini-2.5-flash"
+                                        className="w-full bg-surface-200 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-white/20 outline-none focus:border-brand-500/50 transition-colors"
+                                    />
+                                    <p className="text-[10px] text-white/40 mt-1.5">
+                                        Check OpenRouter for available model IDs. If left blank, defaults to &quot;google/gemini-2.5-flash&quot;.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
                     </section>
 
                     {/* Storage Usage */}
