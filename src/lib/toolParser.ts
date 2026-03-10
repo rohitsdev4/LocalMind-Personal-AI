@@ -1,74 +1,130 @@
-// ============================================================
-// LocalMind — Tool Call Parser
-// Extracts structured tool calls from AI text output
-// ============================================================
-//
-// The AI is instructed to wrap tool calls in <tool_call> tags:
-//   <tool_call>{"name": "create_task", "args": {...}}</tool_call>
-//
-// This parser handles:
-//   - Clean JSON extraction
-//   - Multiple tool calls in one response
-//   - Malformed JSON recovery
-//   - Validation of tool names and arguments
-// ============================================================
+// ================================================================
+// LocalMind -- Tool Call Parser
+// Extracts tool calls from AI-generated text
+// ================================================================
 
-import type { ToolCall } from "./types";
+import { ToolCall } from "./types";
 
-/** Valid tool names the system recognizes */
+/** All valid tool names the AI can invoke */
 const VALID_TOOLS = new Set([
     "create_task",
+    "complete_task",
+    "update_task",
+    "delete_task",
+    "get_tasks",
+    "create_habit",
     "log_habit",
+    "delete_habit",
+    "get_habits",
     "write_journal",
+    "get_journal_entries",
     "search_memory",
     "set_reminder",
+    "get_reminders",
+    "cancel_reminder",
     "get_current_date",
-    "get_tasks",
-    "get_habits",
 ]);
 
-/**
- * Primary parser: extracts tool calls from AI output text.
- * Returns an array of parsed tool calls and the cleaned text
- * (with tool call tags removed).
- */
-export function parseToolCalls(text: string): {
+interface ParseResult {
     toolCalls: ToolCall[];
     cleanText: string;
     hasToolCalls: boolean;
-} {
-    const toolCalls: ToolCall[] = [];
+}
 
-    // Primary regex: match <tool_call>...</tool_call> blocks
-    // Using dotAll (s) flag to match across newlines
+/**
+ * Validate a parsed tool call
+ */
+function validateToolCall(name: string, args: Record<string, unknown>): ToolCall | null {
+    if (!name || typeof name !== "string") return null;
+    const trimmed = name.trim().toLowerCase();
+    if (!VALID_TOOLS.has(trimmed)) {
+        console.warn(`[ToolParser] Unknown tool: ${trimmed}`);
+        return null;
+    }
+    return { name: trimmed, args: args || {} };
+}
+
+/**
+ * Try to fix common JSON issues in tool call arguments
+ */
+function tryFixJSON(jsonStr: string): string {
+    let fixed = jsonStr.trim();
+    // Remove trailing commas before } or ]
+    fixed = fixed.replace(/,\s*([}\]])/g, "$1");
+    // Fix single quotes to double quotes
+    fixed = fixed.replace(/'/g, '"');
+    // Fix unquoted keys
+    fixed = fixed.replace(/(\{|,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g, '$1"$2":');
+    return fixed;
+}
+
+/**
+ * Parse tool calls from AI output text.
+ * Looks for <tool_call>{...}</tool_call> patterns.
+ */
+export function parseToolCalls(text: string): ParseResult {
+    const toolCalls: ToolCall[] = [];
+    let cleanText = text;
+
+    // Primary pattern: <tool_call>{"name": "...", "args": {...}}</tool_call>
     const toolCallRegex = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi;
     let match;
 
     while ((match = toolCallRegex.exec(text)) !== null) {
         const jsonStr = match[1].trim();
-        const parsed = tryParseToolJSON(jsonStr);
-        if (parsed) {
-            toolCalls.push(parsed);
-        }
-    }
+        try {
+            let parsed = JSON.parse(jsonStr);
+            // Handle nested tool_call objects
+            if (parsed.tool_call) parsed = parsed.tool_call;
 
-    // Fallback: try to match ```tool_call blocks (some models use code blocks)
-    if (toolCalls.length === 0) {
-        const codeBlockRegex = /```(?:tool_call|json)?\s*([\s\S]*?)\s*```/gi;
-        while ((match = codeBlockRegex.exec(text)) !== null) {
-            const jsonStr = match[1].trim();
-            const parsed = tryParseToolJSON(jsonStr);
-            if (parsed) {
-                toolCalls.push(parsed);
+            const name = parsed.name || parsed.tool || parsed.function;
+            const args = parsed.args || parsed.arguments || parsed.parameters || {};
+
+            const validated = validateToolCall(name, args);
+            if (validated) {
+                toolCalls.push(validated);
+                cleanText = cleanText.replace(match[0], "");
+            }
+        } catch {
+            // Try to fix JSON
+            try {
+                const fixed = tryFixJSON(jsonStr);
+                const parsed = JSON.parse(fixed);
+                const name = parsed.name || parsed.tool || parsed.function;
+                const args = parsed.args || parsed.arguments || parsed.parameters || {};
+
+                const validated = validateToolCall(name, args);
+                if (validated) {
+                    toolCalls.push(validated);
+                    cleanText = cleanText.replace(match[0], "");
+                }
+            } catch {
+                console.warn("[ToolParser] Failed to parse tool call JSON:", jsonStr);
             }
         }
     }
 
-    // Clean the text by removing tool call tags
-    const cleanText = text
-        .replace(/<tool_call>\s*[\s\S]*?\s*<\/tool_call>/gi, "")
-        .replace(/```(?:tool_call|json)?\s*[\s\S]*?\s*```/gi, "")
-        .trim();
+    // Fallback: look for ```json code blocks with tool calls
+    if (toolCalls.length === 0) {
+        const codeBlockRegex = /```(?:json)?\s*\n?\s*({[\s\S]*?})\s*\n?\s*```/gi;
+        while ((match = codeBlockRegex.exec(text)) !== null) {
+            try {
+                const parsed = JSON.parse(match[1]);
+                if (parsed.name && VALID_TOOLS.has(parsed.name.trim().toLowerCase())) {
+                    const validated = validateToolCall(parsed.name, parsed.args || {});
+                    if (validated) {
+                        toolCalls.push(validated);
+                        cleanText = cleanText.replace(match[0], "");
+                    }
+                }
+            } catch {
+                // Not a tool call code block
+            }
+        }
+    }
+
+    // Clean up extra whitespace
+    cleanText = cleanText.replace(/\n{3,}/g, "\n\n").trim();
 
     return {
         toolCalls,
@@ -78,110 +134,17 @@ export function parseToolCalls(text: string): {
 }
 
 /**
- * Attempts to parse a JSON string into a ToolCall object.
- * Handles common JSON issues from LLM output.
- */
-function tryParseToolJSON(jsonStr: string): ToolCall | null {
-    // Step 1: Direct parse attempt
-    try {
-        const parsed = JSON.parse(jsonStr);
-        return validateToolCall(parsed);
-    } catch {
-        // Step 2: Try to fix common JSON issues
-    }
-
-    // Step 2: Remove trailing commas (common LLM error)
-    let fixed = jsonStr.replace(/,\s*([}\]])/g, "$1");
-
-    // Step 3: Try to fix unquoted keys
-    fixed = fixed.replace(
-        /(\{|,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:/g,
-        '$1"$2":'
-    );
-
-    // Step 4: Fix single quotes to double quotes
-    fixed = fixed.replace(/'/g, '"');
-
-    try {
-        const parsed = JSON.parse(fixed);
-        return validateToolCall(parsed);
-    } catch {
-        // Step 5: Last resort — try to extract name and args separately
-        return extractToolCallFromMessyJSON(jsonStr);
-    }
-}
-
-/**
- * Last-resort extraction for very malformed JSON.
- * Tries to pull out the tool name and basic args.
- */
-function extractToolCallFromMessyJSON(text: string): ToolCall | null {
-    // Try to find "name": "..." pattern
-    const nameMatch = text.match(/["']?name["']?\s*:\s*["']([^"']+)["']/);
-    if (!nameMatch) return null;
-
-    const name = nameMatch[1];
-    if (!VALID_TOOLS.has(name)) return null;
-
-    // Try to find "args": {...} pattern
-    const argsMatch = text.match(/["']?args["']?\s*:\s*(\{[\s\S]*\})/);
-    let args: Record<string, unknown> = {};
-
-    if (argsMatch) {
-        try {
-            args = JSON.parse(argsMatch[1].replace(/'/g, '"'));
-        } catch {
-            // Extract individual key-value pairs
-            const kvRegex = /["']?(\w+)["']?\s*:\s*["']([^"']+)["']/g;
-            let kvMatch;
-            while ((kvMatch = kvRegex.exec(argsMatch[1])) !== null) {
-                args[kvMatch[1]] = kvMatch[2];
-            }
-        }
-    }
-
-    return { name, args };
-}
-
-/**
- * Validates that a parsed object is a valid ToolCall.
- */
-function validateToolCall(obj: Record<string, unknown>): ToolCall | null {
-    if (!obj || typeof obj !== "object") return null;
-
-    const name = obj.name as string;
-    if (!name || typeof name !== "string") return null;
-
-    // Check if it's a known tool
-    if (!VALID_TOOLS.has(name)) return null;
-
-    const args =
-        (obj.args as Record<string, unknown>) ||
-        (obj.arguments as Record<string, unknown>) ||
-        (obj.parameters as Record<string, unknown>) ||
-        {};
-
-    return { name, args };
-}
-
-/**
- * Generates the error message to send back to the AI
- * when a tool call is malformed.
- */
-export function generateRetryPrompt(failedText: string): string {
-    return `[SYSTEM ERROR] Your last tool call was malformed and could not be parsed. The raw output was: "${failedText.slice(0, 200)}". Please retry using the exact format: <tool_call>{"name": "tool_name", "args": {"key": "value"}}</tool_call>. Make sure the JSON is valid.`;
-}
-
-/**
- * Checks if the AI's response likely contains a tool call attempt
- * that wasn't properly formatted.
+ * Detect if text looks like a failed/malformed tool call attempt
  */
 export function looksLikeFailedToolCall(text: string): boolean {
-    const indicators = [
-        /tool_call/i,
-        /"name"\s*:\s*"(create_task|log_habit|write_journal|search_memory|set_reminder|get_current_date|get_tasks|get_habits)"/i,
-        /\{[^}]*"name"[^}]*"args"/i,
+    const allToolNames = Array.from(VALID_TOOLS).join("|");
+    const patterns = [
+        new RegExp(`\\b(${allToolNames})\\s*\\(`, "i"),
+        new RegExp(`\\b(${allToolNames})\\s*\\{`, "i"),
+        /tool_call[^>]/i,
+        /<tool[^_]/i,
+        /\{\s*"name"\s*:\s*"\w+".*"args"/i,
     ];
 
-    return indicators.some((regex) => regex.test(text));
+    return patterns.some((p) => p.test(text));
 }
