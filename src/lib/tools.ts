@@ -104,6 +104,18 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             "Returns the current date and time. Use when you need to know today's date or the current time.",
         parameters: {},
     },
+    {
+        name: "get_tasks",
+        description:
+            "Returns a list of all your current tasks. Use when the user asks what tasks they have, or asks you to list their tasks.",
+        parameters: {},
+    },
+    {
+        name: "get_habits",
+        description:
+            "Returns a list of all your habits and their streaks. Use when the user asks what habits they are tracking.",
+        parameters: {},
+    },
 ];
 
 // ============================================================
@@ -125,6 +137,10 @@ export async function executeTool(toolCall: ToolCall): Promise<ToolResult> {
                 return await executeSetReminder(toolCall.args);
             case "get_current_date":
                 return executeGetCurrentDate();
+            case "get_tasks":
+                return await executeGetTasks();
+            case "get_habits":
+                return await executeGetHabits();
             default:
                 return {
                     success: false,
@@ -372,6 +388,42 @@ function executeGetCurrentDate(): ToolResult {
     };
 }
 
+async function executeGetTasks(): Promise<ToolResult> {
+    const tasks = await db.getAllTasks();
+    if (tasks.length === 0) {
+        return {
+            success: true,
+            data: [],
+            displayMessage: `📝 You have no tasks.`,
+        };
+    }
+
+    const formattedTasks = tasks.map((t, i) => `${i + 1}. [${t.status}] ${t.name} (Priority: ${t.priority})`).join("\n");
+    return {
+        success: true,
+        data: tasks,
+        displayMessage: `📝 Here are your tasks:\n${formattedTasks}`,
+    };
+}
+
+async function executeGetHabits(): Promise<ToolResult> {
+    const habits = await db.getAllHabits();
+    if (habits.length === 0) {
+        return {
+            success: true,
+            data: [],
+            displayMessage: `🔥 You have no habits tracking.`,
+        };
+    }
+
+    const formattedHabits = habits.map((h, i) => `${i + 1}. ${h.name} (Streak: ${h.streak} days, Frequency: ${h.frequency})`).join("\n");
+    return {
+        success: true,
+        data: habits,
+        displayMessage: `🔥 Here are your habits:\n${formattedHabits}`,
+    };
+}
+
 // ============================================================
 // Helpers
 // ============================================================
@@ -437,5 +489,7 @@ export function getToolDefinitionsForPrompt(): string {
         "- search_memory(query): Search past tasks/chats/habits/journal",
         "- set_reminder(message, time): Set browser notification (e.g. '30m', '2h')",
         "- get_current_date(): Get current date and time",
+        "- get_tasks(): List all tasks",
+        "- get_habits(): List all habits",
     ].join("\n");
 }

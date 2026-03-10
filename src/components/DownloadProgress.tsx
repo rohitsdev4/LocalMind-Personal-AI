@@ -6,8 +6,16 @@
 // ============================================================
 
 import React from "react";
-import type { ModelDownloadProgress, EngineStatus } from "@/lib/types";
+import type { EngineStatus } from "@/lib/types";
 import { Brain, Download, Loader2, Cpu, CheckCircle2, AlertTriangle } from "lucide-react";
+
+interface ModelDownloadProgress {
+    progress: number;
+    timeElapsed: number;
+    text: string;
+    loaded: number;
+    total: number;
+}
 
 interface DownloadProgressProps {
     progress: ModelDownloadProgress;

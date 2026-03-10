@@ -97,11 +97,12 @@ export interface JournalEntry {
 // ============================================================
 
 export interface UserSettings {
-    selectedModel: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC" | "SmolLM2-360M-Instruct-q4f16_1-MLC";
+    selectedModel: string;
     theme: "dark" | "light";
     notificationsEnabled: boolean;
     maxContextMessages: number;
     installedAt?: Timestamp;
+    openRouterApiKey?: string;
 }
 
 // ============================================================
@@ -119,14 +120,6 @@ export interface Reminder {
 // ============================================================
 // AI Engine Types
 // ============================================================
-
-export interface ModelDownloadProgress {
-    progress: number; // 0-100
-    timeElapsed: number; // seconds
-    text: string;
-    loaded: number; // bytes loaded
-    total: number; // total bytes
-}
 
 export type EngineStatus =
     | "idle"

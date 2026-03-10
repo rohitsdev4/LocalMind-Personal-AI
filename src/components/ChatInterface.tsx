@@ -16,7 +16,6 @@ import {
     Paperclip,
     ArrowDown,
     Zap,
-    Shield,
 } from "lucide-react";
 import { MessageBubble, ThinkingIndicator } from "./MessageBubble";
 import { DownloadProgress } from "./DownloadProgress";
@@ -54,11 +53,9 @@ const SUGGESTIONS = [
 export function ChatInterface() {
     const {
         status,
-        progress,
         messages,
         isGenerating,
         error,
-        webGPUSupported,
         initEngine,
         sendMessage,
         clearMessages,
@@ -68,7 +65,7 @@ export function ChatInterface() {
     const [input, setInput] = useState("");
     const [showSettings, setShowSettings] = useState(false);
     const [showScrollButton, setShowScrollButton] = useState(false);
-    const [currentModel, setCurrentModel] = useState("Qwen2.5-1.5B-Instruct-q4f16_1-MLC");
+    const [currentModel, setCurrentModel] = useState("SmolLM2-360M-Instruct-q4f16_1-MLC");
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -153,45 +150,6 @@ export function ChatInterface() {
         [clearMessages]
     );
 
-    // ============================================================
-    // WebGPU Not Supported Error Screen
-    // ============================================================
-
-    if (!webGPUSupported) {
-        return (
-            <div className="fixed inset-0 flex items-center justify-center bg-surface p-6">
-                <div className="text-center max-w-sm animate-fade-in">
-                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-accent-rose/20 mb-4">
-                        <Shield className="w-8 h-8 text-accent-rose" />
-                    </div>
-                    <h2 className="text-xl font-bold text-white mb-2">
-                        WebGPU Not Available
-                    </h2>
-                    <p className="text-white/50 text-sm leading-relaxed mb-6">
-                        LocalMind requires WebGPU to run AI models locally on your device.
-                        Please use:
-                    </p>
-                    <ul className="text-left space-y-2 text-sm text-white/60 mb-6">
-                        <li className="flex items-center gap-2">
-                            <Zap className="w-4 h-4 text-accent-amber" />
-                            Chrome 113+ or Edge 113+
-                        </li>
-                        <li className="flex items-center gap-2">
-                            <Zap className="w-4 h-4 text-accent-amber" />
-                            Android 12+ with updated WebView
-                        </li>
-                        <li className="flex items-center gap-2">
-                            <Zap className="w-4 h-4 text-accent-amber" />
-                            macOS Ventura+ with Safari 18+
-                        </li>
-                    </ul>
-                    <p className="text-white/30 text-xs">
-                        {error}
-                    </p>
-                </div>
-            </div>
-        );
-    }
 
     // ============================================================
     // Main Render
@@ -202,7 +160,7 @@ export function ChatInterface() {
             {/* Download Progress Overlay */}
             {(status === "downloading" || status === "loading" || status === "error") && (
                 <DownloadProgress
-                    progress={progress}
+                    progress={{ progress: 100, loaded: 100, total: 100, text: "Ready", timeElapsed: 0 }}
                     status={status}
                     error={error}
                     onRetry={() => initEngine(currentModel)}
@@ -286,8 +244,8 @@ export function ChatInterface() {
                             Hi! I&apos;m LocalMind
                         </h2>
                         <p className="text-sm text-white/40 text-center max-w-[260px] mb-8">
-                            Your private AI assistant. I can help you manage tasks, track
-                            habits, and journal — all offline.
+                            Your AI assistant. I can help you manage tasks, track
+                            habits, and journal. Powered by OpenRouter.
                         </p>
 
                         {/* Suggestion Chips */}
@@ -318,19 +276,22 @@ export function ChatInterface() {
                             Welcome to LocalMind
                         </h2>
                         <p className="text-sm text-white/40 text-center max-w-[280px] mb-6">
-                            Your AI runs 100% on-device. No cloud, no data sharing. Tap below
-                            to download the AI model.
+                            Powered by OpenRouter. Enter your free API key in settings to start.
                         </p>
                         <button
+                            onClick={() => setShowSettings(true)}
+                            className="px-8 py-3.5 rounded-2xl bg-gradient-to-r from-brand-500 to-accent-purple text-white font-semibold text-sm shadow-xl shadow-brand-500/30 hover:shadow-brand-500/40 transition-all active:scale-95 flex items-center gap-2 mb-4"
+                        >
+                            <Settings className="w-4 h-4" />
+                            Open Settings
+                        </button>
+                        <button
                             onClick={() => initEngine(currentModel)}
-                            className="px-8 py-3.5 rounded-2xl bg-gradient-to-r from-brand-500 to-accent-purple text-white font-semibold text-sm shadow-xl shadow-brand-500/30 hover:shadow-brand-500/40 transition-all active:scale-95 flex items-center gap-2"
+                            className="px-8 py-3.5 rounded-2xl bg-surface-200 text-white font-semibold text-sm shadow-xl hover:bg-surface-300 transition-all active:scale-95 flex items-center gap-2"
                         >
                             <Zap className="w-4 h-4" />
-                            Initialize AI Engine
+                            Start (If Key Added)
                         </button>
-                        <p className="text-white/20 text-xs mt-3">
-                            One-time download (~900MB). Cached for offline use.
-                        </p>
                     </div>
                 )}
 
@@ -414,7 +375,7 @@ export function ChatInterface() {
 
                     {/* Bottom safety label */}
                     <p className="text-center text-[10px] text-white/15 mt-2">
-                        100% private — AI runs locally on your device
+                        Powered by OpenRouter API
                     </p>
                 </div>
             )}

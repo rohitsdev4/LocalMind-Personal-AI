@@ -51,6 +51,7 @@ export function SettingsModal({
     const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [deleting, setDeleting] = useState(false);
+    const [apiKey, setApiKey] = useState("");
 
     useEffect(() => {
         if (isOpen) {
@@ -61,8 +62,24 @@ export function SettingsModal({
     const loadData = async () => {
         const s = await db.getSettings();
         setSettings(s);
+        if (s.openRouterApiKey) {
+            setApiKey(s.openRouterApiKey);
+        }
         const info = await db.getStorageUsage();
         setStorageInfo(info);
+    };
+
+    const handleApiKeyChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newKey = e.target.value;
+        setApiKey(newKey);
+        if (settings) {
+            const newSettings: UserSettings = {
+                ...settings,
+                openRouterApiKey: newKey,
+            };
+            await db.saveSettings(newSettings);
+            setSettings(newSettings);
+        }
     };
 
     const handleModelChange = async (modelId: string) => {
@@ -98,17 +115,24 @@ export function SettingsModal({
 
     const MODELS = [
         {
-            id: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
-            name: "Qwen 2.5 (1.5B)",
-            desc: "Best quality — optimized for tool calling & reasoning",
-            size: "~900MB",
+            id: "google/gemini-2.5-flash:free",
+            name: "Gemini 2.5 Flash",
+            desc: "Fast and lightweight",
+            size: "Free",
             recommended: true,
         },
         {
-            id: "SmolLM2-360M-Instruct-q4f16_1-MLC",
-            name: "SmolLM2 (360M)",
-            desc: "Lightweight — for low-memory devices",
-            size: "~250MB",
+            id: "deepseek/deepseek-chat:free",
+            name: "DeepSeek V3",
+            desc: "High performance chat model",
+            size: "Free",
+            recommended: false,
+        },
+        {
+            id: "meta-llama/llama-3.3-70b-instruct:free",
+            name: "Llama 3.3 70B",
+            desc: "Great quality for reasoning",
+            size: "Free",
             recommended: false,
         },
     ];
@@ -147,6 +171,31 @@ export function SettingsModal({
                 </div>
 
                 <div className="p-5 space-y-6">
+                    {/* API Key */}
+                    <section>
+                        <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-3 flex items-center gap-2">
+                            <Settings className="w-3.5 h-3.5" />
+                            OpenRouter Configuration
+                        </h3>
+                        <div className="space-y-3">
+                            <div className="flex flex-col gap-1.5">
+                                <label className="text-sm font-medium text-white/70">
+                                    API Key
+                                </label>
+                                <input
+                                    type="password"
+                                    value={apiKey}
+                                    onChange={handleApiKeyChange}
+                                    placeholder="sk-or-v1-..."
+                                    className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-white text-sm focus:outline-none focus:border-brand-500 transition-colors"
+                                />
+                                <p className="text-xs text-white/30">
+                                    Get your free key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-brand-400 hover:underline">openrouter.ai</a>
+                                </p>
+                            </div>
+                        </div>
+                    </section>
+
                     {/* AI Model Selection */}
                     <section>
                         <h3 className="text-xs font-semibold text-white/40 uppercase tracking-wider mb-3 flex items-center gap-2">
