@@ -206,6 +206,7 @@ function calculateRelevance(text: string, queryWords: string[]): number {
 /**
  * Loads the most recent memory summaries for system prompt injection.
  * This gives the AI "awareness" of past conversations at startup.
+ * Modified to also include the active tasks, habits, and recent journals.
  */
 export async function getRecentMemoryContext(
     count: number = 5
@@ -213,11 +214,36 @@ export async function getRecentMemoryContext(
     const summaries = await db.getAllMemorySummaries();
     const recent = summaries.slice(0, count);
 
-    if (recent.length === 0) {
+    // Also inject state of active features (Cross-module AI context)
+    const pendingTasks = (await db.getAllTasks()).filter(t => t.status !== "done").slice(0, 3);
+    const activeHabits = (await db.getAllHabits()).slice(0, 3);
+    const recentJournals = (await db.getAllJournalEntries()).slice(0, 2);
+
+    let contextBlock = "";
+
+    if (recent.length > 0) {
+        const memoryBlock = recent.map((s) => s.summary).join("\n---\n");
+        contextBlock += `[LONG-TERM MEMORY — Recent Conversations]\n${memoryBlock}\n`;
+    }
+
+    if (pendingTasks.length > 0) {
+        const tasksStr = pendingTasks.map(t => `- [${t.priority}] ${t.name} (Due: ${t.dueDate || 'none'})`).join('\n');
+        contextBlock += `\n[ACTIVE TASKS]\n${tasksStr}\n`;
+    }
+
+    if (activeHabits.length > 0) {
+        const habitsStr = activeHabits.map(h => `- ${h.name} (${h.streak} day streak)`).join('\n');
+        contextBlock += `\n[ACTIVE HABITS]\n${habitsStr}\n`;
+    }
+
+    if (recentJournals.length > 0) {
+        const journalsStr = recentJournals.map(j => `- [Mood: ${j.mood}] ${j.entry.slice(0, 100)}...`).join('\n');
+        contextBlock += `\n[RECENT JOURNALS]\n${journalsStr}\n`;
+    }
+
+    if (!contextBlock) {
         return "";
     }
 
-    const memoryBlock = recent.map((s) => s.summary).join("\n---\n");
-
-    return `\n\n[LONG-TERM MEMORY — Recent Conversation Summaries]\n${memoryBlock}\n[END MEMORY]`;
+    return `\n\n${contextBlock}[END CONTEXT]`;
 }

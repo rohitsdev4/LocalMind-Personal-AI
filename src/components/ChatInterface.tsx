@@ -25,6 +25,8 @@ import { InstallPrompt } from "./InstallPrompt";
 import { useWebLLM } from "@/hooks/useWebLLM";
 import db from "@/lib/db";
 import { Sidebar } from "./Sidebar";
+import { HabitsView } from "./HabitsView";
+import { JournalView } from "./JournalView";
 
 // ============================================================
 // Quick action suggestions for empty state
@@ -70,6 +72,7 @@ export function ChatInterface() {
     const [showScrollButton, setShowScrollButton] = useState(false);
     const [currentModel, setCurrentModel] = useState("SmolLM2-360M-Instruct-q4f16_1-MLC");
     const [showSidebar, setShowSidebar] = useState(false);
+    const [activeView, setActiveView] = useState("chat");
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -417,7 +420,16 @@ export function ChatInterface() {
             <Sidebar
                 isOpen={showSidebar}
                 onClose={() => setShowSidebar(false)}
+                onFeatureSelect={(feature) => setActiveView(feature)}
             />
+
+            {/* Views */}
+            {activeView === "habits" && (
+                <HabitsView onClose={() => setActiveView("chat")} />
+            )}
+            {activeView === "journal" && (
+                <JournalView onClose={() => setActiveView("chat")} />
+            )}
 
             {/* Hide scrollbar globally */}
             <style jsx global>{`

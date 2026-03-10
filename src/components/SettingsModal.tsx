@@ -21,6 +21,7 @@ import {
     Flame,
     BookHeart,
     Bell,
+    Download,
 } from "lucide-react";
 import db from "@/lib/db";
 import type { UserSettings } from "@/lib/types";
@@ -141,6 +142,28 @@ export function SettingsModal({
         setDeleting(false);
         setShowDeleteConfirm(false);
         await loadData();
+    };
+
+    const handleExportData = async () => {
+        const data = {
+            settings: await db.getSettings(),
+            tasks: await db.getAllTasks(),
+            habits: await db.getAllHabits(),
+            journals: await db.getAllJournalEntries(),
+            reminders: await db.getAllReminders(),
+            chats: await db.getAllChatSessions(),
+            summaries: await db.getAllMemorySummaries()
+        };
+
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `localmind-export-${new Date().toISOString().split("T")[0]}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     };
 
     if (!isOpen) return null;
@@ -332,6 +355,13 @@ export function SettingsModal({
                                 </span>
                             </div>
                         </div>
+                        <button
+                            onClick={handleExportData}
+                            className="w-full mt-3 p-3.5 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-white text-sm font-medium transition-all flex items-center justify-center gap-2"
+                        >
+                            <Download className="w-4 h-4" />
+                            Export Data (JSON)
+                        </button>
                     </section>
 
                     {/* Danger Zone */}
