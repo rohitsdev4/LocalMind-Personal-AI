@@ -63,7 +63,7 @@ export interface Task {
 
 export interface HabitLog {
     date: string; // YYYY-MM-DD
-    status: "done" | "skipped" | "missed";
+    status: "done" | "skipped" | "missed" | "paused";
     note?: string;
 }
 
@@ -71,9 +71,12 @@ export interface Habit {
     id: ID;
     name: string;
     description?: string;
-    frequency: "daily" | "weekly" | "monthly";
+    category?: string;
+    timeOfDay?: "morning" | "afternoon" | "evening" | "any";
+    frequency: "daily" | "weekly" | "monthly" | { type: "x_per_week", times: number };
     logs: HabitLog[];
     streak: number;
+    longestStreak: number;
     createdAt: Timestamp;
     updatedAt: Timestamp;
 }

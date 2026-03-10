@@ -12,6 +12,7 @@ import type {
     ToolDefinition,
     Task,
     TaskPriority,
+    Habit,
     JournalEntry,
     Mood,
     Reminder,
@@ -41,14 +42,29 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     {
         name: "log_habit",
         description:
-            "Logs a habit completion or creates a new habit. Use when the user mentions doing/skipping a habit.",
+            "Logs a habit completion or updates its status. Use when the user mentions doing, skipping, or pausing a habit.",
         parameters: {
             name: { type: "string", description: "The habit name", required: true },
             status: {
                 type: "string",
-                description: "Status: done, skipped, or missed",
+                description: "Status: done, skipped, missed, or paused",
                 required: true,
             },
+            note: {
+                type: "string",
+                description: "Optional note or observation about the habit.",
+            },
+        },
+    },
+    {
+        name: "create_habit",
+        description: "Creates a new habit to track. Use when the user explicitly asks to start tracking a new habit.",
+        parameters: {
+            name: { type: "string", description: "The habit name", required: true },
+            category: { type: "string", description: "Category: Health, Learning, Productivity, Mindfulness, or Other." },
+            timeOfDay: { type: "string", description: "Time to do it: morning, afternoon, evening, or any." },
+            frequencyType: { type: "string", description: "Frequency: daily, weekly, monthly, or x_per_week." },
+            frequencyTimes: { type: "string", description: "If x_per_week, how many times." },
         },
     },
     {
@@ -129,6 +145,8 @@ export async function executeTool(toolCall: ToolCall): Promise<ToolResult> {
                 return await executeCreateTask(toolCall.args);
             case "log_habit":
                 return await executeLogHabit(toolCall.args);
+            case "create_habit":
+                return await executeCreateHabit(toolCall.args);
             case "write_journal":
                 return await executeWriteJournal(toolCall.args);
             case "search_memory":
@@ -188,11 +206,48 @@ async function executeCreateTask(
     };
 }
 
+async function executeCreateHabit(
+    args: Record<string, unknown>
+): Promise<ToolResult> {
+    const name = String(args.name || "Untitled Habit");
+    const category = String(args.category || "Health");
+    const timeOfDay = validateTimeOfDay(String(args.timeOfDay || "any"));
+    const frequencyType = validateFrequencyType(String(args.frequencyType || "daily"));
+    const frequencyTimes = parseInt(String(args.frequencyTimes || "3"), 10);
+
+    let frequency: "daily" | "weekly" | "monthly" | { type: "x_per_week", times: number } = frequencyType as "daily" | "weekly" | "monthly";
+    if (frequencyType === "x_per_week") {
+        frequency = { type: "x_per_week", times: isNaN(frequencyTimes) ? 3 : frequencyTimes };
+    }
+
+    const habit: Habit = {
+        id: uuidv4(),
+        name,
+        category,
+        timeOfDay,
+        frequency,
+        logs: [],
+        streak: 0,
+        longestStreak: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+    };
+
+    await db.saveHabit(habit);
+
+    return {
+        success: true,
+        data: habit,
+        displayMessage: `✅ Created habit: "${name}" (${category}, ${timeOfDay})`,
+    };
+}
+
 async function executeLogHabit(
     args: Record<string, unknown>
 ): Promise<ToolResult> {
     const name = String(args.name || "Unnamed Habit");
     const status = validateHabitStatus(String(args.status || "done"));
+    const note = args.note ? String(args.note) : undefined;
 
     // Check if habit already exists
     const allHabits = await db.getAllHabits();
@@ -204,24 +259,44 @@ async function executeLogHabit(
 
     if (habit) {
         // Update existing habit
-        const alreadyLogged = habit.logs.some((l) => l.date === today);
-        if (!alreadyLogged) {
-            habit.logs.push({ date: today, status });
+        const logIndex = habit.logs.findIndex((l) => l.date === today);
+        let newStreak = habit.streak;
+
+        if (logIndex >= 0) {
+            const oldStatus = habit.logs[logIndex].status;
+            habit.logs[logIndex] = { date: today, status, note };
+
+            if (oldStatus !== "done" && status === "done") {
+                newStreak += 1;
+            } else if (oldStatus === "done" && status !== "done") {
+                newStreak = Math.max(0, newStreak - 1);
+            }
+        } else {
+            habit.logs.push({ date: today, status, note });
             if (status === "done") {
-                habit.streak += 1;
-            } else {
-                habit.streak = 0;
+                newStreak += 1;
+            } else if (status === "skipped" || status === "missed") {
+                newStreak = 0;
             }
         }
+
+        habit.streak = newStreak;
+        if (newStreak > (habit.longestStreak || 0)) {
+            habit.longestStreak = newStreak;
+        }
+
         habit.updatedAt = new Date().toISOString();
     } else {
-        // Create new habit
+        // Create new habit if it doesn't exist
         habit = {
             id: uuidv4(),
             name,
+            category: "Other",
+            timeOfDay: "any",
             frequency: "daily",
-            logs: [{ date: today, status }],
+            logs: [{ date: today, status, note }],
             streak: status === "done" ? 1 : 0,
+            longestStreak: status === "done" ? 1 : 0,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
         };
@@ -229,11 +304,11 @@ async function executeLogHabit(
 
     await db.saveHabit(habit);
 
-    const emoji = status === "done" ? "🔥" : status === "skipped" ? "⏭️" : "❌";
+    const emoji = status === "done" ? "🔥" : status === "skipped" ? "⏭️" : status === "paused" ? "⏸️" : "❌";
     return {
         success: true,
         data: habit,
-        displayMessage: `${emoji} Habit "${name}" — ${status} (${habit.streak} day streak)`,
+        displayMessage: `${emoji} Habit "${name}" — ${status} (${habit.streak} day streak)${note ? `\n📝 Note: ${note}` : ""}`,
     };
 }
 
@@ -434,10 +509,22 @@ function validatePriority(priority: string): TaskPriority {
     return valid.includes(p) ? p : "medium";
 }
 
-function validateHabitStatus(status: string): "done" | "skipped" | "missed" {
-    const valid = ["done", "skipped", "missed"] as const;
+function validateHabitStatus(status: string): "done" | "skipped" | "missed" | "paused" {
+    const valid = ["done", "skipped", "missed", "paused"] as const;
     const s = status.toLowerCase() as (typeof valid)[number];
     return valid.includes(s) ? s : "done";
+}
+
+function validateTimeOfDay(time: string): "morning" | "afternoon" | "evening" | "any" {
+    const valid = ["morning", "afternoon", "evening", "any"] as const;
+    const t = time.toLowerCase() as (typeof valid)[number];
+    return valid.includes(t) ? t : "any";
+}
+
+function validateFrequencyType(type: string): "daily" | "weekly" | "monthly" | "x_per_week" {
+    const valid = ["daily", "weekly", "monthly", "x_per_week"] as const;
+    const t = type.toLowerCase() as (typeof valid)[number];
+    return valid.includes(t) ? t : "daily";
 }
 
 function validateMood(mood: string): Mood {
@@ -484,7 +571,8 @@ function scheduleNotification(reminder: Reminder): void {
 export function getToolDefinitionsForPrompt(): string {
     return [
         "- create_task(name, due_date?, priority?): Create a task",
-        "- log_habit(name, status): Log habit as done/skipped/missed",
+        "- log_habit(name, status, note?): Log habit status (done/skipped/missed/paused)",
+        "- create_habit(name, category?, timeOfDay?, frequencyType?, frequencyTimes?): Create a habit to track",
         "- write_journal(entry, mood): Save journal entry with mood",
         "- search_memory(query): Search past tasks/chats/habits/journal",
         "- set_reminder(message, time): Set browser notification (e.g. '30m', '2h')",

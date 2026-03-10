@@ -25,6 +25,7 @@ import { InstallPrompt } from "./InstallPrompt";
 import { useWebLLM } from "@/hooks/useWebLLM";
 import db from "@/lib/db";
 import { Sidebar } from "./Sidebar";
+import HabitsView from "./HabitsView";
 
 // ============================================================
 // Quick action suggestions for empty state
@@ -70,6 +71,7 @@ export function ChatInterface() {
     const [showScrollButton, setShowScrollButton] = useState(false);
     const [currentModel, setCurrentModel] = useState("SmolLM2-360M-Instruct-q4f16_1-MLC");
     const [showSidebar, setShowSidebar] = useState(false);
+    const [activeFeature, setActiveFeature] = useState("chat");
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -248,6 +250,8 @@ export function ChatInterface() {
             {/* ============================== */}
             {/* Messages Area */}
             {/* ============================== */}
+            {activeFeature === "chat" ? (
+                <>
             <div
                 ref={messagesContainerRef}
                 onScroll={handleScroll}
@@ -402,6 +406,17 @@ export function ChatInterface() {
                     </p>
                 </div>
             )}
+                </>
+            ) : activeFeature === "habits" ? (
+                <div className="flex-1 overflow-y-auto">
+                    <HabitsView />
+                </div>
+            ) : (
+                <div className="flex flex-col items-center justify-center h-full flex-1">
+                    <h2 className="text-xl font-bold text-white mb-2 capitalize">{activeFeature}</h2>
+                    <p className="text-white/40">Coming Soon!</p>
+                </div>
+            )}
 
             {/* Settings Modal */}
             <SettingsModal
@@ -417,6 +432,8 @@ export function ChatInterface() {
             <Sidebar
                 isOpen={showSidebar}
                 onClose={() => setShowSidebar(false)}
+                activeFeature={activeFeature}
+                onFeatureSelect={setActiveFeature}
             />
 
             {/* Hide scrollbar globally */}

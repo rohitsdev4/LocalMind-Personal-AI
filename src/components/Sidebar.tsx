@@ -4,6 +4,8 @@ import { MessageSquare, ListTodo, Flame, Bell, BookHeart, X } from "lucide-react
 interface SidebarProps {
     isOpen: boolean;
     onClose: () => void;
+    onFeatureSelect: (featureId: string) => void;
+    activeFeature: string;
 }
 
 const MENU_ITEMS = [
@@ -14,13 +16,11 @@ const MENU_ITEMS = [
     { id: "journal", icon: BookHeart, label: "Journal", color: "text-accent-pink" },
 ];
 
-export function Sidebar({ isOpen, onClose }: SidebarProps) {
+export function Sidebar({ isOpen, onClose, onFeatureSelect, activeFeature }: SidebarProps) {
     if (!isOpen) return null;
 
-    const handleFeatureClick = () => {
-        // In this minimal version, all features use the main chat view but we could
-        // navigate to different routes or alter chat context here.
-        // The prompt stated: "All connected to the main chat window but can use also specific features for specific task only direct through selecting menu"
+    const handleFeatureClick = (featureId: string) => {
+        onFeatureSelect(featureId);
         onClose();
     };
 
@@ -49,10 +49,10 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                             return (
                                 <button
                                     key={item.id}
-                                    onClick={() => handleFeatureClick()}
-                                    className="w-full flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-white/5 text-white/70 hover:text-white transition-all group"
+                                    onClick={() => handleFeatureClick(item.id)}
+                                    className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-white/5 transition-all group ${activeFeature === item.id ? "bg-white/10 text-white" : "text-white/70 hover:text-white"}`}
                                 >
-                                    <div className={`p-2 rounded-lg bg-white/[0.03] group-hover:bg-white/10 ${item.color} transition-all`}>
+                                    <div className={`p-2 rounded-lg bg-white/[0.03] group-hover:bg-white/10 ${item.color} transition-all ${activeFeature === item.id ? "bg-white/10" : ""}`}>
                                         <Icon className="w-4 h-4" />
                                     </div>
                                     <span className="text-sm font-medium">{item.label}</span>
