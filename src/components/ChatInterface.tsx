@@ -53,7 +53,6 @@ const SUGGESTIONS = [
 export function ChatInterface() {
     const {
         status,
-        progress,
         messages,
         isGenerating,
         error,
@@ -161,7 +160,7 @@ export function ChatInterface() {
             {/* Download Progress Overlay */}
             {(status === "downloading" || status === "loading" || status === "error") && (
                 <DownloadProgress
-                    progress={progress}
+                    progress={{ progress: 100, loaded: 100, total: 100, text: "Ready", timeElapsed: 0 }}
                     status={status}
                     error={error}
                     onRetry={() => initEngine(currentModel)}

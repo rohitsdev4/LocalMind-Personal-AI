@@ -9,7 +9,7 @@ import { v4 as uuidv4 } from "uuid";
 import type {
     ChatMessage,
     EngineStatus,
-    ModelDownloadProgress,
+    UserSettings,
 } from "@/lib/types";
 import {
     parseToolCalls,
@@ -26,11 +26,9 @@ import db from "@/lib/db";
 
 interface UseWebLLMReturn {
     status: EngineStatus;
-    progress: ModelDownloadProgress;
     messages: ChatMessage[];
     isGenerating: boolean;
     error: string | null;
-    webGPUSupported: boolean;
     initEngine: (modelId?: string) => Promise<void>;
     sendMessage: (content: string) => Promise<void>;
     clearMessages: () => void;
@@ -44,18 +42,8 @@ interface UseWebLLMReturn {
 export function useWebLLM(): UseWebLLMReturn {
     const [status, setStatus] = useState<EngineStatus>("idle");
     const [error, setError] = useState<string | null>(null);
-    const [webGPUSupported, setWebGPUSupported] = useState(true);
     const [isGenerating, setIsGenerating] = useState(false);
     const abortRef = useRef<AbortController | null>(null);
-
-    // Fake progress tracking since we don't download models anymore
-    const [progress] = useState<ModelDownloadProgress>({
-        progress: 100,
-        timeElapsed: 0,
-        text: "Ready",
-        loaded: 0,
-        total: 0,
-    });
 
     // Messages
     const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -74,9 +62,6 @@ export function useWebLLM(): UseWebLLMReturn {
         try {
             setStatus("loading");
             setError(null);
-
-            // Set webGPUSupported to true to bypass check
-            setWebGPUSupported(true);
 
             setStatus("ready");
 
@@ -187,17 +172,24 @@ export function useWebLLM(): UseWebLLMReturn {
 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
+                let buffer = "";
 
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
 
-                    const chunk = decoder.decode(value, { stream: true });
-                    const lines = chunk.split("\n").filter((line) => line.trim() !== "");
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split("\n");
+
+                    // Keep the last partial line in the buffer
+                    buffer = lines.pop() || "";
 
                     for (const line of lines) {
-                        if (line.startsWith("data: ")) {
-                            const data = line.slice(6);
+                        const trimmedLine = line.trim();
+                        if (!trimmedLine) continue;
+
+                        if (trimmedLine.startsWith("data: ")) {
+                            const data = trimmedLine.slice(6);
                             if (data === "[DONE]") continue;
 
                             try {
@@ -213,9 +205,32 @@ export function useWebLLM(): UseWebLLMReturn {
                                         )
                                     );
                                 }
-                            } catch {
-                                // Ignore parse errors for incomplete chunks
+                            } catch (e) {
+                                console.error("Error parsing JSON chunk:", e, data);
                             }
+                        }
+                    }
+                }
+
+                // Process any remaining buffer content
+                if (buffer.trim().startsWith("data: ")) {
+                    const data = buffer.trim().slice(6);
+                    if (data !== "[DONE]") {
+                        try {
+                            const parsed = JSON.parse(data);
+                            const delta = parsed.choices?.[0]?.delta?.content || "";
+                            if (delta) {
+                                fullContent += delta;
+                                setMessages((prev) =>
+                                    prev.map((m) =>
+                                        m.id === assistantMsgId
+                                            ? { ...m, content: fullContent }
+                                            : m
+                                    )
+                                );
+                            }
+                        } catch (e) {
+                            console.error("Error parsing final JSON chunk:", e, data);
                         }
                     }
                 }
@@ -268,7 +283,19 @@ export function useWebLLM(): UseWebLLMReturn {
                             )
                         );
 
-                        // NOTE: streamFollowUp has been removed for simplicity in this rewrite.
+                        // For search_memory, do a quick follow-up (also streamed)
+                        if (
+                            toolCall.name === "search_memory" &&
+                            result.success &&
+                            result.data
+                        ) {
+                            await streamFollowUp(
+                                settings,
+                                llmMessages,
+                                toolCall,
+                                result
+                            );
+                        }
                     }
                 } else if (looksLikeFailedToolCall(fullContent)) {
                     // Simple error message for failed tools without retrying stream to save time
@@ -303,6 +330,124 @@ export function useWebLLM(): UseWebLLMReturn {
         },
         [isGenerating]
     );
+
+    // ============================================================
+    // Streaming follow-up for search_memory results
+    // ============================================================
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async function streamFollowUp(
+        settings: UserSettings,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        baseMsgs: any[],
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        toolCall: any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        result: any
+    ) {
+        if (!settings.openRouterApiKey) return;
+
+        const contextInjection = {
+            role: "system" as const,
+            content: `[MEMORY RESULTS for "${toolCall.args.query}"]\n${result.displayMessage}\n[END]\nUse this to answer the user. Be concise.`,
+        };
+
+        const followUpId = uuidv4();
+        setMessages((prev) => [
+            ...prev,
+            {
+                id: followUpId,
+                role: "assistant" as const,
+                content: "",
+                timestamp: new Date().toISOString(),
+            },
+        ]);
+
+        let followUpContent = "";
+
+        try {
+            const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${settings.openRouterApiKey}`,
+                    "HTTP-Referer": window.location.href,
+                    "X-Title": "LocalMind",
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    model: settings.selectedModel,
+                    messages: [...baseMsgs, contextInjection],
+                    stream: true,
+                }),
+                signal: abortRef.current?.signal,
+            });
+
+            if (!response.ok || !response.body) return;
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split("\n");
+                buffer = lines.pop() || "";
+
+                for (const line of lines) {
+                    const trimmedLine = line.trim();
+                    if (!trimmedLine) continue;
+
+                    if (trimmedLine.startsWith("data: ")) {
+                        const data = trimmedLine.slice(6);
+                        if (data === "[DONE]") continue;
+
+                        try {
+                            const parsed = JSON.parse(data);
+                            const delta = parsed.choices?.[0]?.delta?.content || "";
+                            if (delta) {
+                                followUpContent += delta;
+                                setMessages((prev) =>
+                                    prev.map((m) =>
+                                        m.id === followUpId
+                                            ? { ...m, content: followUpContent }
+                                            : m
+                                    )
+                                );
+                            }
+                        } catch {
+                            // ignore parse errors
+                        }
+                    }
+                }
+            }
+
+            if (buffer.trim().startsWith("data: ")) {
+                const data = buffer.trim().slice(6);
+                if (data !== "[DONE]") {
+                    try {
+                        const parsed = JSON.parse(data);
+                        const delta = parsed.choices?.[0]?.delta?.content || "";
+                        if (delta) {
+                            followUpContent += delta;
+                            setMessages((prev) =>
+                                prev.map((m) =>
+                                    m.id === followUpId
+                                        ? { ...m, content: followUpContent }
+                                        : m
+                                )
+                            );
+                        }
+                    } catch {
+                        // Ignore
+                    }
+                }
+            }
+        } catch (err) {
+            console.error("Follow-up error:", err);
+        }
+    }
 
     // ============================================================
     // Utility Functions
@@ -347,11 +492,9 @@ export function useWebLLM(): UseWebLLMReturn {
 
     return {
         status,
-        progress,
         messages,
         isGenerating,
         error,
-        webGPUSupported,
         initEngine,
         sendMessage,
         clearMessages,

@@ -121,14 +121,6 @@ export interface Reminder {
 // AI Engine Types
 // ============================================================
 
-export interface ModelDownloadProgress {
-    progress: number; // 0-100
-    timeElapsed: number; // seconds
-    text: string;
-    loaded: number; // bytes loaded
-    total: number; // total bytes
-}
-
 export type EngineStatus =
     | "idle"
     | "downloading"
