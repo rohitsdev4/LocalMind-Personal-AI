@@ -68,7 +68,7 @@ export function ChatInterface() {
     const [input, setInput] = useState("");
     const [showSettings, setShowSettings] = useState(false);
     const [showScrollButton, setShowScrollButton] = useState(false);
-    const [currentModel, setCurrentModel] = useState("Qwen2.5-1.5B-Instruct-q4f16_1-MLC");
+    const [currentModel, setCurrentModel] = useState("SmolLM2-360M-Instruct-q4f16_1-MLC");
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesContainerRef = useRef<HTMLDivElement>(null);
