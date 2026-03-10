@@ -53,7 +53,11 @@ const SUGGESTIONS = [
     },
 ];
 
-export function ChatInterface() {
+interface ChatInterfaceProps {
+    onSelectView: (view: "chat" | "tasks") => void;
+}
+
+export function ChatInterface({ onSelectView }: ChatInterfaceProps) {
     const {
         status,
         messages,
@@ -417,6 +421,7 @@ export function ChatInterface() {
             <Sidebar
                 isOpen={showSidebar}
                 onClose={() => setShowSidebar(false)}
+                onSelectView={onSelectView}
             />
 
             {/* Hide scrollbar globally */}

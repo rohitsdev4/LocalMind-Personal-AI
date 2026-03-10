@@ -4,6 +4,7 @@ import { MessageSquare, ListTodo, Flame, Bell, BookHeart, X } from "lucide-react
 interface SidebarProps {
     isOpen: boolean;
     onClose: () => void;
+    onSelectView: (view: "chat" | "tasks") => void;
 }
 
 const MENU_ITEMS = [
@@ -14,13 +15,15 @@ const MENU_ITEMS = [
     { id: "journal", icon: BookHeart, label: "Journal", color: "text-accent-pink" },
 ];
 
-export function Sidebar({ isOpen, onClose }: SidebarProps) {
+export function Sidebar({ isOpen, onClose, onSelectView }: SidebarProps) {
     if (!isOpen) return null;
 
-    const handleFeatureClick = () => {
-        // In this minimal version, all features use the main chat view but we could
-        // navigate to different routes or alter chat context here.
-        // The prompt stated: "All connected to the main chat window but can use also specific features for specific task only direct through selecting menu"
+    const handleFeatureClick = (id: string) => {
+        if (id === "chat" || id === "tasks") {
+            onSelectView(id as "chat" | "tasks");
+        } else {
+            onSelectView("chat");
+        }
         onClose();
     };
 
@@ -49,7 +52,7 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
                             return (
                                 <button
                                     key={item.id}
-                                    onClick={() => handleFeatureClick()}
+                                    onClick={() => handleFeatureClick(item.id)}
                                     className="w-full flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-white/5 text-white/70 hover:text-white transition-all group"
                                 >
                                     <div className={`p-2 rounded-lg bg-white/[0.03] group-hover:bg-white/10 ${item.color} transition-all`}>

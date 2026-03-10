@@ -1,0 +1,22 @@
+
+> localmind@1.0.0 dev
+> next dev
+
+  ▲ Next.js 14.2.35
+  - Local:        http://localhost:3000
+
+ ✓ Starting...
+ ✓ Ready in 1865ms
+ ○ Compiling / ...
+ ✓ Compiled / in 7.4s (695 modules)
+ GET / 200 in 8258ms
+ ✓ Compiled in 865ms (341 modules)
+ GET / 200 in 198ms
+ GET / 200 in 45ms
+ GET / 200 in 45ms
+ GET / 200 in 47ms
+ GET / 200 in 27ms
+ GET / 200 in 25ms
+ GET / 200 in 42ms
+ ✓ Compiled in 1223ms (695 modules)
+ ✓ Compiled in 319ms (695 modules)

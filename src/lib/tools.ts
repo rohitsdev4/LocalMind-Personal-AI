@@ -429,9 +429,16 @@ async function executeGetHabits(): Promise<ToolResult> {
 // ============================================================
 
 function validatePriority(priority: string): TaskPriority {
-    const valid: TaskPriority[] = ["low", "medium", "high", "urgent"];
-    const p = priority.toLowerCase() as TaskPriority;
-    return valid.includes(p) ? p : "medium";
+    const p = priority.toUpperCase();
+
+    // Map legacy priorities
+    if (p === "LOW") return "P4";
+    if (p === "MEDIUM") return "P3";
+    if (p === "HIGH") return "P2";
+    if (p === "URGENT") return "P1";
+
+    const valid: TaskPriority[] = ["P1", "P2", "P3", "P4"];
+    return valid.includes(p as TaskPriority) ? (p as TaskPriority) : "P3";
 }
 
 function validateHabitStatus(status: string): "done" | "skipped" | "missed" {

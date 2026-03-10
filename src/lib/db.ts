@@ -114,14 +114,23 @@ export const db = {
         await taskStore.setItem(task.id, task);
     },
 
+    async saveTasks(tasks: Task[]): Promise<void> {
+        const promises = tasks.map((task) => taskStore.setItem(task.id, task));
+        await Promise.all(promises);
+    },
+
     async getAllTasks(): Promise<Task[]> {
         const tasks: Task[] = [];
         await taskStore.iterate<Task, void>((value) => {
             tasks.push(value);
         });
-        return tasks.sort(
-            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        );
+        // Sort by order first (if exists), then by createdAt
+        return tasks.sort((a, b) => {
+            if (a.order !== undefined && b.order !== undefined) {
+                return a.order - b.order;
+            }
+            return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        });
     },
 
     async deleteTask(id: ID): Promise<void> {

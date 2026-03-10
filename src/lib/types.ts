@@ -42,19 +42,41 @@ export interface ChatSession {
 // Tasks
 // ============================================================
 
-export type TaskPriority = "low" | "medium" | "high" | "urgent";
+export type TaskPriority = "P1" | "P2" | "P3" | "P4"; // P1 is highest, P4 is lowest
 export type TaskStatus = "pending" | "in-progress" | "done" | "cancelled";
+
+export interface SubTask {
+    id: ID;
+    name: string;
+    status: "pending" | "done";
+}
+
+export interface Tag {
+    id: ID;
+    name: string;
+    color: string;
+}
 
 export interface Task {
     id: ID;
     name: string;
     description?: string;
-    dueDate?: Timestamp;
+    dueDate?: Timestamp; // Now could include time component
     priority: TaskPriority;
     status: TaskStatus;
     createdAt: Timestamp;
     updatedAt: Timestamp;
-    tags?: string[];
+    tags?: string[]; // IDs or string names
+    projectId?: string;
+    subTasks?: SubTask[];
+    recurrence?: "daily" | "weekly" | "custom" | null;
+    order?: number; // For drag and drop ordering
+}
+
+export interface Project {
+    id: ID;
+    name: string;
+    color?: string;
 }
 
 // ============================================================
